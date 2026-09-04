@@ -1,8 +1,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <vector>
 #include "config/ConfigManager.h"
 #include "portal/WebPortal.h"
 #include "mqtt/MQTTHandler.h"
+#include "sampling/SamplingManager.h"
 
 // Chân nút nhấn BOOT trên ESP32 để kích hoạt lại chế độ cấu hình
 const int BUTTON_PIN = 0; // GPIO 0 (Nút BOOT có sẵn trên board ESP32)
@@ -11,6 +13,53 @@ const unsigned long BUTTON_HOLD_TIME = 3000; // Giữ 3 giây để vào chế �
 unsigned long buttonPressStartTime = 0;
 bool buttonIsPressed = false;
 unsigned long lastHeartbeat = 0;
+
+// Hàm phân tích lệnh từ MQTT nhận được
+void handleMqttCommand(const String &msg) {
+    String payload = msg;
+    payload.trim();
+
+    Serial.printf("[Command] Nhận payload: %s\n", payload.c_str());
+
+    // Xử lý lệnh dạng JSON hoặc chuỗi văn bản đơn giản
+    // 1. Lệnh đo lường (Measure)
+    if (payload.indexOf("measure") >= 0 || payload.indexOf("do") >= 0) {
+        std::vector<String> sensors;
+
+        if (payload.indexOf("\"all\"") >= 0 || payload.indexOf("all") >= 0) {
+            sensors.push_back("all");
+        } else {
+            if (payload.indexOf("temp") >= 0 || payload.indexOf("nhiet_do") >= 0) sensors.push_back("temp");
+            if (payload.indexOf("ph") >= 0) sensors.push_back("ph");
+            if (payload.indexOf("turbidity") >= 0 || payload.indexOf("turb") >= 0 || payload.indexOf("do_duc") >= 0) sensors.push_back("turbidity");
+            if (payload.indexOf("tds") >= 0) sensors.push_back("tds");
+        }
+
+        // Nếu chỉ gửi "measure" hoặc "do" mà không chỉ định cảm biến -> Mặc định đo tất cả
+        if (sensors.empty()) {
+            sensors.push_back("all");
+        }
+
+        samplingManager.requestMeasurement(sensors);
+    }
+    // 2. Lệnh điều khiển bơm thủ công (Manual Pump)
+    else if (payload.indexOf("pump") >= 0 || payload.indexOf("bom") >= 0) {
+        bool state = (payload.indexOf("ON") >= 0 || payload.indexOf("on") >= 0 || payload.indexOf("1") >= 0 || payload.indexOf("bat") >= 0);
+        String target = "inlet";
+        if (payload.indexOf("drain") >= 0 || payload.indexOf("xa") >= 0) {
+            target = "drain";
+        }
+        samplingManager.setManualPump(target, state);
+    }
+    // 3. Lệnh lấy trạng thái hiện tại (Status query)
+    else if (payload.indexOf("status") >= 0) {
+        String statusJson = "{\"state\":\"" + samplingManager.getStateName() + "\",\"is_busy\":" + (samplingManager.isBusy() ? "true" : "false") + "}";
+        mqttHandler.publish("status", statusJson);
+    }
+    else {
+        Serial.println("[Command] Lệnh không nhận diện được. Gợi ý: {\"action\":\"measure\",\"sensors\":[\"all\"]}");
+    }
+}
 
 void setup() {
     Serial.begin(115200);
@@ -21,6 +70,9 @@ void setup() {
     Serial.println("==========================================");
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+    // Khởi tạo module lấy mẫu (Bật chế độ mô phỏng demo)
+    samplingManager.begin(true);
 
     // Đọc cấu hình đã lưu
     bool hasConfig = configManager.loadConfig(currentConfig);
@@ -59,9 +111,10 @@ void setup() {
         mqttHandler.setCallback([](char* topic, byte* payload, unsigned int length) {
             String msg;
             for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-            Serial.printf("[App] Lệnh nhận được: %s\n", msg.c_str());
+            Serial.printf("[App] Lệnh nhận từ MQTT: %s\n", msg.c_str());
 
-            // Xử lý các lệnh điều khiển tại đây (Ví dụ: bật tắt cho ăn, đèn, máy bơm...)
+            // Chuyển cho bộ điều phối lệnh
+            handleMqttCommand(msg);
         });
     } else {
         Serial.println("[Main] Kết nối WiFi thất bại (Sai pass hoặc mất sóng)!");
@@ -107,11 +160,14 @@ void loop() {
     // Xử lý kết nối và nhận lệnh MQTT
     mqttHandler.handle();
 
+    // Xử lý máy trạng thái lấy mẫu & đo chỉ số (Bơm -> Đo tuần tự -> Xả)
+    samplingManager.handle();
+
     // Gửi tin nhắn định kỳ (Heartbeat telemetry) mỗi 30 giây
     if (millis() - lastHeartbeat > 30000) {
         lastHeartbeat = millis();
         if (mqttHandler.isConnected()) {
-            String telemetry = "{\"rssi\":" + String(WiFi.RSSI()) + ",\"uptime\":" + String(millis() / 1000) + "}";
+            String telemetry = "{\"rssi\":" + String(WiFi.RSSI()) + ",\"uptime\":" + String(millis() / 1000) + ",\"state\":\"" + samplingManager.getStateName() + "\"}";
             mqttHandler.publish("telemetry", telemetry);
             Serial.println("[Main] Đã gửi telemetry lên MQTT.");
         }

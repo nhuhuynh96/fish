@@ -1,0 +1,188 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/lib/pq"
+	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
+)
+
+type Store struct {
+	db *sql.DB
+}
+
+func NewStore(db *sql.DB) *Store {
+	return &Store{db: db}
+}
+
+// MeasurementRepository
+func (s *Store) SaveMeasurement(ctx context.Context, m *fish.Measurement) error {
+	query := `
+		INSERT INTO measurements (id, device_id, timestamp, status, duration_ms, sensors, temperature, ph, turbidity, tds, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		m.ID, m.DeviceID, m.Timestamp, m.Status, m.DurationMs,
+		pq.Array(m.Sensors), m.Temperature, m.PH, m.Turbidity, m.TDS, m.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert measurement: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetLatestMeasurement(ctx context.Context, deviceID string) (*fish.Measurement, error) {
+	query := `
+		SELECT id, device_id, timestamp, status, duration_ms, sensors, temperature, ph, turbidity, tds, created_at
+		FROM measurements
+		WHERE device_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+	row := s.db.QueryRowContext(ctx, query, deviceID)
+
+	var m fish.Measurement
+	var sensors []string
+	err := row.Scan(
+		&m.ID, &m.DeviceID, &m.Timestamp, &m.Status, &m.DurationMs,
+		pq.Array(&sensors), &m.Temperature, &m.PH, &m.Turbidity, &m.TDS, &m.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query latest measurement: %w", err)
+	}
+	m.Sensors = sensors
+	return &m, nil
+}
+
+func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int) ([]fish.Measurement, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	query := `
+		SELECT id, device_id, timestamp, status, duration_ms, sensors, temperature, ph, turbidity, tds, created_at
+		FROM measurements
+		WHERE device_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+	rows, err := s.db.QueryContext(ctx, query, deviceID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query measurements: %w", err)
+	}
+	defer rows.Close()
+
+	list := make([]fish.Measurement, 0)
+	for rows.Next() {
+		var m fish.Measurement
+		var sensors []string
+		if err := rows.Scan(
+			&m.ID, &m.DeviceID, &m.Timestamp, &m.Status, &m.DurationMs,
+			pq.Array(&sensors), &m.Temperature, &m.PH, &m.Turbidity, &m.TDS, &m.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		m.Sensors = sensors
+		list = append(list, m)
+	}
+	return list, nil
+}
+
+// EventRepository
+func (s *Store) SaveEvent(ctx context.Context, e *fish.SamplingEvent) error {
+	query := `
+		INSERT INTO sampling_events (id, device_id, stage, state, message, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`
+	_, err := s.db.ExecContext(ctx, query, e.ID, e.DeviceID, e.Stage, e.State, e.Message, e.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert event: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListEvents(ctx context.Context, deviceID string, limit int) ([]fish.SamplingEvent, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	query := `
+		SELECT id, device_id, stage, state, message, created_at
+		FROM sampling_events
+		WHERE device_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+	rows, err := s.db.QueryContext(ctx, query, deviceID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query events: %w", err)
+	}
+	defer rows.Close()
+
+	list := make([]fish.SamplingEvent, 0)
+	for rows.Next() {
+		var e fish.SamplingEvent
+		if err := rows.Scan(&e.ID, &e.DeviceID, &e.Stage, &e.State, &e.Message, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		list = append(list, e)
+	}
+	return list, nil
+}
+
+// DeviceRepository
+func (s *Store) UpsertDevice(ctx context.Context, d *fish.Device) error {
+	query := `
+		INSERT INTO devices (id, online, ip, state, last_seen, rssi, uptime)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (id) DO UPDATE
+		SET online = EXCLUDED.online,
+		    ip = CASE WHEN EXCLUDED.ip <> '' THEN EXCLUDED.ip ELSE devices.ip END,
+		    state = CASE WHEN EXCLUDED.state <> '' THEN EXCLUDED.state ELSE devices.state END,
+		    last_seen = EXCLUDED.last_seen,
+		    rssi = CASE WHEN EXCLUDED.rssi <> 0 THEN EXCLUDED.rssi ELSE devices.rssi END,
+		    uptime = CASE WHEN EXCLUDED.uptime <> 0 THEN EXCLUDED.uptime ELSE devices.uptime END
+	`
+	_, err := s.db.ExecContext(ctx, query, d.ID, d.Online, d.IP, d.State, d.LastSeen, d.RSSI, d.Uptime)
+	if err != nil {
+		return fmt.Errorf("upsert device: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetDevice(ctx context.Context, deviceID string) (*fish.Device, error) {
+	query := `SELECT id, online, ip, state, last_seen, rssi, uptime FROM devices WHERE id = $1`
+	row := s.db.QueryRowContext(ctx, query, deviceID)
+
+	var d fish.Device
+	err := row.Scan(&d.ID, &d.Online, &d.IP, &d.State, &d.LastSeen, &d.RSSI, &d.Uptime)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+func (s *Store) ListDevices(ctx context.Context) ([]fish.Device, error) {
+	query := `SELECT id, online, ip, state, last_seen, rssi, uptime FROM devices ORDER BY last_seen DESC`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	list := make([]fish.Device, 0)
+	for rows.Next() {
+		var d fish.Device
+		if err := rows.Scan(&d.ID, &d.Online, &d.IP, &d.State, &d.LastSeen, &d.RSSI, &d.Uptime); err != nil {
+			return nil, err
+		}
+		list = append(list, d)
+	}
+	return list, nil
+}

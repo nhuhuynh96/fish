@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fish_postgres
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: fish
+      POSTGRES_PASSWORD: fishpass
+      POSTGRES_DB: fish_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fish -d fish_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: fish_mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqttdata:/mosquitto/data
+      - mqttlog:/mosquitto/log
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./be
+      dockerfile: Dockerfile
+    container_name: fish_backend
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      APP_PORT: "8080"
+      DB_DSN: "postgres://fish:fishpass@postgres:5432/fish_db?sslmode=disable"
+      MQTT_BROKER: "tcp://mqtt:1883"
+      MQTT_CLIENT_ID: "fish_backend_service"
+      CORS_ORIGIN: "*"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  mqttdata:
+  mqttlog:
