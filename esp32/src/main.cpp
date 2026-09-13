@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ArduinoJson.h>
 #include <vector>
 #include "config/ConfigManager.h"
 #include "portal/WebPortal.h"
@@ -14,51 +15,116 @@ unsigned long buttonPressStartTime = 0;
 bool buttonIsPressed = false;
 unsigned long lastHeartbeat = 0;
 
-// Hàm phân tích lệnh từ MQTT nhận được
+static void publishCommandError(const String &message) {
+    Serial.println("[Command] " + message);
+    if (mqttHandler.isConnected()) {
+        String payload = "{\"device_id\":\"" + currentConfig.device_id + "\",";
+        payload += "\"stage\":\"command_error\",";
+        payload += "\"state\":\"" + samplingManager.getStateName() + "\",";
+        payload += "\"message\":\"" + message + "\"}";
+        mqttHandler.publish("event", payload);
+    }
+}
+
+static bool parsePumpState(JsonVariantConst stateVar, bool &outState) {
+    if (stateVar.is<bool>()) {
+        outState = stateVar.as<bool>();
+        return true;
+    }
+
+    if (stateVar.is<int>() || stateVar.is<long>() || stateVar.is<float>()) {
+        outState = stateVar.as<int>() != 0;
+        return true;
+    }
+
+    if (stateVar.is<const char*>()) {
+        String s = stateVar.as<const char*>();
+        s.toLowerCase();
+        s.trim();
+        if (s == "on" || s == "1" || s == "true" || s == "bat") {
+            outState = true;
+            return true;
+        }
+        if (s == "off" || s == "0" || s == "false" || s == "tat") {
+            outState = false;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Parse lệnh MQTT JSON chuẩn từ backend
+// {"action":"measure","sensors":["temp","tds"]}
+// {"action":"pump","target":"inlet","state":"ON"}
+// {"action":"status"}
 void handleMqttCommand(const String &msg) {
     String payload = msg;
     payload.trim();
 
     Serial.printf("[Command] Nhận payload: %s\n", payload.c_str());
 
-    // Xử lý lệnh dạng JSON hoặc chuỗi văn bản đơn giản
-    // 1. Lệnh đo lường (Measure)
-    if (payload.indexOf("measure") >= 0 || payload.indexOf("do") >= 0) {
-        std::vector<String> sensors;
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, payload);
+    if (err) {
+        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"measure\",\"sensors\":[\"tds\"]}");
+        return;
+    }
 
-        if (payload.indexOf("\"all\"") >= 0 || payload.indexOf("all") >= 0) {
-            sensors.push_back("all");
-        } else {
-            if (payload.indexOf("temp") >= 0 || payload.indexOf("nhiet_do") >= 0) sensors.push_back("temp");
-            if (payload.indexOf("ph") >= 0) sensors.push_back("ph");
-            if (payload.indexOf("turbidity") >= 0 || payload.indexOf("turb") >= 0 || payload.indexOf("do_duc") >= 0) sensors.push_back("turbidity");
-            if (payload.indexOf("tds") >= 0) sensors.push_back("tds");
+    const char *actionRaw = doc["action"] | "";
+    String action = actionRaw;
+    action.toLowerCase();
+    action.trim();
+
+    if (action == "measure" || action == "do") {
+        std::vector<String> sensors;
+        JsonVariantConst sensorsVar = doc["sensors"];
+
+        if (sensorsVar.is<JsonArrayConst>()) {
+            for (JsonVariantConst item : sensorsVar.as<JsonArrayConst>()) {
+                if (item.is<const char*>()) {
+                    sensors.push_back(String(item.as<const char*>()));
+                }
+            }
+        } else if (sensorsVar.is<const char*>()) {
+            sensors.push_back(String(sensorsVar.as<const char*>()));
         }
 
-        // Nếu chỉ gửi "measure" hoặc "do" mà không chỉ định cảm biến -> Mặc định đo tất cả
         if (sensors.empty()) {
             sensors.push_back("all");
         }
 
-        samplingManager.requestMeasurement(sensors);
+        samplingManager.enqueueMeasure(sensors);
+        return;
     }
-    // 2. Lệnh điều khiển bơm thủ công (Manual Pump)
-    else if (payload.indexOf("pump") >= 0 || payload.indexOf("bom") >= 0) {
-        bool state = (payload.indexOf("ON") >= 0 || payload.indexOf("on") >= 0 || payload.indexOf("1") >= 0 || payload.indexOf("bat") >= 0);
-        String target = "inlet";
-        if (payload.indexOf("drain") >= 0 || payload.indexOf("xa") >= 0) {
-            target = "drain";
+
+    if (action == "pump" || action == "bom") {
+        String target = doc["target"] | "inlet";
+        target.trim();
+        if (target.isEmpty()) target = "inlet";
+
+        bool state = false;
+        if (!parsePumpState(doc["state"], state)) {
+            publishCommandError("Thiếu/sai state cho pump. Dùng \"ON\"/\"OFF\" hoặc true/false.");
+            return;
         }
-        samplingManager.setManualPump(target, state);
+
+        samplingManager.enqueuePump(target, state);
+        return;
     }
-    // 3. Lệnh lấy trạng thái hiện tại (Status query)
-    else if (payload.indexOf("status") >= 0) {
-        String statusJson = "{\"state\":\"" + samplingManager.getStateName() + "\",\"is_busy\":" + (samplingManager.isBusy() ? "true" : "false") + "}";
-        mqttHandler.publish("status", statusJson);
+
+    if (action == "status") {
+        samplingManager.enqueueStatus();
+        return;
     }
-    else {
-        Serial.println("[Command] Lệnh không nhận diện được. Gợi ý: {\"action\":\"measure\",\"sensors\":[\"all\"]}");
+
+    // schedule / auto_toggle từ backend: nhận nhưng chưa điều khiển phần cứng
+    if (action == "schedule" || action == "auto_toggle") {
+        Serial.printf("[Command] Nhận action '%s' (chưa triển khai phần cứng).\n", action.c_str());
+        return;
     }
+
+    publishCommandError("action không hỗ trợ. Dùng measure | pump | status.");
 }
 
 void setup() {
@@ -71,8 +137,8 @@ void setup() {
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-    // Khởi tạo module lấy mẫu (Bật chế độ mô phỏng demo)
-    samplingManager.begin(true);
+    // Khởi tạo module lấy mẫu với bơm và phao thật
+    samplingManager.begin(false);
 
     // Đọc cấu hình đã lưu
     bool hasConfig = configManager.loadConfig(currentConfig);
@@ -167,7 +233,7 @@ void loop() {
     if (millis() - lastHeartbeat > 30000) {
         lastHeartbeat = millis();
         if (mqttHandler.isConnected()) {
-            String telemetry = "{\"rssi\":" + String(WiFi.RSSI()) + ",\"uptime\":" + String(millis() / 1000) + ",\"state\":\"" + samplingManager.getStateName() + "\"}";
+            String telemetry = "{\"rssi\":" + String(WiFi.RSSI()) + ",\"uptime\":" + String(millis() / 1000) + ",\"state\":\"" + samplingManager.getStateName() + "\",\"queue_size\":" + String((unsigned)samplingManager.queueSize()) + "}";
             mqttHandler.publish("telemetry", telemetry);
             Serial.println("[Main] Đã gửi telemetry lên MQTT.");
         }
