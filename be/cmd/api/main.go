@@ -33,6 +33,7 @@ func main() {
 	var measRepo fish.MeasurementRepository
 	var eventRepo fish.EventRepository
 	var devRepo fish.DeviceRepository
+	var calRepo fish.CalibrationRepository
 
 	if cfg.DBDSN != "" {
 		log.Println("[Storage] Đang kết nối PostgreSQL:", cfg.DBDSN)
@@ -46,12 +47,14 @@ func main() {
 		measRepo = pgStore
 		eventRepo = pgStore
 		devRepo = pgStore
+		calRepo = pgStore
 	} else {
 		log.Println("[Storage] Sử dụng In-Memory Store (Chưa cấu hình DB_DSN)")
 		memStore := memory.NewStore()
 		measRepo = memStore
 		eventRepo = memStore
 		devRepo = memStore
+		calRepo = memStore
 	}
 
 	// 2. Khởi tạo WebSocket Realtime Hub
@@ -68,7 +71,7 @@ func main() {
 	pub := inframqtt.NewCommandPublisher(mqttClient)
 
 	// 4. Khởi tạo Core Service (Usecase Layer)
-	fishSvc := fishuc.NewService(measRepo, eventRepo, devRepo, pub, hub)
+	fishSvc := fishuc.NewService(measRepo, eventRepo, devRepo, calRepo, pub, hub)
 
 	// 4b. Khởi tạo Bộ Lập Lịch Cronjob Tập Trung tại Backend
 	sched := scheduler.NewScheduler(fishSvc)

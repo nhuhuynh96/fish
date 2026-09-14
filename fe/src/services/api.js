@@ -1,5 +1,6 @@
-const API_BASE = 'http://localhost:8080/api';
-const WS_BASE = 'ws://localhost:8080/ws';
+const API_BASE = '/api';
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
 
 export const api = {
   async getDevices() {
@@ -69,6 +70,23 @@ export const api = {
       body: JSON.stringify({ enabled }),
     });
     return res.json();
+  },
+
+  async getCalibration(deviceId) {
+    const res = await fetch(`${API_BASE}/devices/${deviceId}/calibration`);
+    const json = await res.json();
+    return json.data || null;
+  },
+
+  async updateCalibration(deviceId, calibration) {
+    const res = await fetch(`${API_BASE}/devices/${deviceId}/calibration`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(calibration),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Update calibration failed');
+    return json.data;
   },
 };
 

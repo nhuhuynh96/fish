@@ -206,7 +206,70 @@ func (h *FishHandler) ListEvents(c *gin.Context) {
 	respond.OK(c, list)
 }
 
-// 6. Lấy danh sách thiết bị
+// 6. Lấy cấu hình hiệu chuẩn cảm biến
+func (h *FishHandler) GetCalibration(c *gin.Context) {
+	deviceID := c.Param("id")
+	cal, err := h.svc.GetCalibration(c.Request.Context(), deviceID)
+	if err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+	respond.OK(c, cal)
+}
+
+// 7. Cập nhật cấu hình hiệu chuẩn cảm biến
+func (h *FishHandler) UpdateCalibration(c *gin.Context) {
+	deviceID := c.Param("id")
+	var req struct {
+		PHNeutralV float64 `json:"ph_neutral_v"`
+		PHSlope    float64 `json:"ph_slope"`
+		TDSTempC   float64 `json:"tds_temp_c"`
+		TurbVClear float64 `json:"turb_v_clear"`
+		TurbVDirty float64 `json:"turb_v_dirty"`
+		TurbNTUMax float64 `json:"turb_ntu_max"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respond.BadRequest(c, "invalid body")
+		return
+	}
+
+	cal, err := h.svc.GetCalibration(c.Request.Context(), deviceID)
+	if err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+	if req.PHNeutralV > 0 {
+		cal.PHNeutralV = req.PHNeutralV
+	}
+	if req.PHSlope > 0 {
+		cal.PHSlope = req.PHSlope
+	}
+	if req.TDSTempC > 0 {
+		cal.TDSTempC = req.TDSTempC
+	}
+	if req.TurbVClear > 0 {
+		cal.TurbVClear = req.TurbVClear
+	}
+	if req.TurbVDirty > 0 {
+		cal.TurbVDirty = req.TurbVDirty
+	}
+	if req.TurbNTUMax > 0 {
+		cal.TurbNTUMax = req.TurbNTUMax
+	}
+
+	if err := h.svc.UpdateCalibration(c.Request.Context(), cal); err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+
+	respond.OK(c, gin.H{
+		"message":     "Calibration updated",
+		"device":      deviceID,
+		"calibration": cal,
+	})
+}
+
+// 8. Lấy danh sách thiết bị
 func (h *FishHandler) ListDevices(c *gin.Context) {
 	list, err := h.svc.ListDevices(c.Request.Context())
 	if err != nil {

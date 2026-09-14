@@ -6,5 +6,10 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
+    proxy: {
+      '/api': { target: 'http://localhost:8082', changeOrigin: true },
+      '/ws': { target: 'ws://localhost:8082', ws: true },
+      '/health': { target: 'http://localhost:8082', changeOrigin: true },
+    },
   },
 });

@@ -482,3 +482,57 @@ td {
 tr:hover td {
   background: rgba(255, 255, 255, 0.02);
 }
+
+/* Calibration Panel */
+.calibration-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.cal-fieldset {
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 14px 16px 16px;
+  min-width: 0;
+}
+
+.cal-fieldset legend {
+  padding: 0 6px;
+  color: var(--primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.cal-fieldset label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.cal-fieldset input {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.raw-debug {
+  border-top: 1px solid var(--card-border);
+  padding-top: 12px;
+}
+
+.raw-debug-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}

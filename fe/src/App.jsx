@@ -7,6 +7,23 @@ import SchedulePanel from './components/SchedulePanel';
 import ControlPanel from './components/ControlPanel';
 import EventLogStream from './components/EventLogStream';
 import HistoryTable from './components/HistoryTable';
+import CalibrationPanel from './components/CalibrationPanel';
+
+function mergeMeasurement(prev, incoming) {
+  if (!prev) return incoming;
+  if (!incoming) return prev;
+  const merged = { ...prev, ...incoming };
+  const fields = [
+    'temperature', 'ph', 'turbidity', 'tds',
+    'ph_adc', 'ph_voltage', 'tds_adc', 'tds_voltage', 'turbidity_adc', 'turbidity_voltage',
+  ];
+  for (const f of fields) {
+    if (incoming[f] === undefined || incoming[f] === null) {
+      merged[f] = prev[f];
+    }
+  }
+  return merged;
+}
 
 export default function App() {
   const [devices, setDevices] = useState([]);
@@ -57,7 +74,7 @@ export default function App() {
 
         if (type === 'sensor_data') {
           if (payload.device_id === selectedDevice) {
-            setLatestMeasurement(payload);
+            setLatestMeasurement((prev) => mergeMeasurement(prev, payload));
             setHistory((prev) => [payload, ...prev.slice(0, 19)]);
             setCurrentState('IDLE');
           }
@@ -157,6 +174,10 @@ export default function App() {
           onSetSchedule={handleSetSchedule}
           onToggleAuto={handleToggleAuto}
         />
+      </div>
+
+      <div style={{ marginBottom: '28px' }}>
+        <CalibrationPanel deviceId={selectedDevice} latestMeasurement={latestMeasurement} />
       </div>
 
       <HistoryTable history={history} />

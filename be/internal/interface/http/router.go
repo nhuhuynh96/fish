@@ -47,6 +47,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 			devices.POST("/:id/pump", fishHandler.Pump)
 			devices.POST("/:id/schedule", fishHandler.SetSchedule)
 			devices.POST("/:id/auto", fishHandler.ToggleAuto)
+			devices.GET("/:id/calibration", fishHandler.GetCalibration)
+			devices.PUT("/:id/calibration", fishHandler.UpdateCalibration)
 		}
 	}
 

@@ -16,6 +16,12 @@ type Measurement struct {
 	PH          *float64  `json:"ph,omitempty"`
 	Turbidity   *float64  `json:"turbidity,omitempty"`
 	TDS         *float64  `json:"tds,omitempty"`
+	PHAdc         *int     `json:"ph_adc,omitempty"`
+	PHVoltage     *float64 `json:"ph_voltage,omitempty"`
+	TDSAdc        *int     `json:"tds_adc,omitempty"`
+	TDSVoltage    *float64 `json:"tds_voltage,omitempty"`
+	TurbidityAdc  *int     `json:"turbidity_adc,omitempty"`
+	TurbidityVoltage *float64 `json:"turbidity_voltage,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 

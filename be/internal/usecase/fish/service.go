@@ -10,12 +10,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
+	"github.com/nhuhuynh/iot-fish/internal/pkg/calibrate"
 )
 
 type Service struct {
 	repo      fish.MeasurementRepository
 	eventRepo fish.EventRepository
 	devRepo   fish.DeviceRepository
+	calRepo   fish.CalibrationRepository
 	pub       fish.CommandPublisher
 	hub       fish.EventHub
 }
@@ -24,6 +26,7 @@ func NewService(
 	repo fish.MeasurementRepository,
 	eventRepo fish.EventRepository,
 	devRepo fish.DeviceRepository,
+	calRepo fish.CalibrationRepository,
 	pub fish.CommandPublisher,
 	hub fish.EventHub,
 ) *Service {
@@ -31,6 +34,7 @@ func NewService(
 		repo:      repo,
 		eventRepo: eventRepo,
 		devRepo:   devRepo,
+		calRepo:   calRepo,
 		pub:       pub,
 		hub:       hub,
 	}
@@ -64,16 +68,27 @@ func (s *Service) ToggleAuto(ctx context.Context, deviceID string, enabled bool)
 	return s.pub.PublishAutoToggle(ctx, deviceID, enabled)
 }
 
+type rawReading struct {
+	ADC         int     `json:"adc"`
+	Voltage     float64 `json:"voltage"`
+	SampleCount int     `json:"sample_count"`
+}
+
 // 3. Xử lý nhận dữ liệu cảm biến đo xong từ MQTT
 func (s *Service) HandleSensorData(ctx context.Context, deviceID string, payload []byte) error {
-	log.Printf("[Usecase] Nhận sensor_data thô từ [%s]: %s", deviceID, string(payload))
+	log.Printf("[Usecase] Nhận sensor_data từ [%s]: %s", deviceID, string(payload))
 	var body struct {
 		DeviceID   string   `json:"device_id"`
 		Timestamp  int64    `json:"timestamp"`
 		Status     string   `json:"status"`
 		DurationMs int64    `json:"duration_ms"`
 		Sensors    []string `json:"sensors_measured"`
-		Data       struct {
+		Raw        struct {
+			PH        *rawReading `json:"ph"`
+			TDS       *rawReading `json:"tds"`
+			Turbidity *rawReading `json:"turbidity"`
+		} `json:"raw"`
+		Data struct {
 			Temperature *float64 `json:"temperature"`
 			PH          *float64 `json:"ph"`
 			Turbidity   *float64 `json:"turbidity"`
@@ -90,29 +105,98 @@ func (s *Service) HandleSensorData(ctx context.Context, deviceID string, payload
 	}
 
 	m := &fish.Measurement{
-		ID:          uuid.New().String(),
-		DeviceID:    body.DeviceID,
-		Timestamp:   body.Timestamp,
-		Status:      body.Status,
-		DurationMs:  body.DurationMs,
-		Sensors:     body.Sensors,
-		Temperature: body.Data.Temperature,
-		PH:          body.Data.PH,
-		Turbidity:   body.Data.Turbidity,
-		TDS:         body.Data.TDS,
-		CreatedAt:   time.Now(),
+		ID:         uuid.New().String(),
+		DeviceID:   body.DeviceID,
+		Timestamp:  body.Timestamp,
+		Status:     body.Status,
+		DurationMs: body.DurationMs,
+		Sensors:    body.Sensors,
+		CreatedAt:  time.Now(),
+	}
+
+	hasRaw := body.Raw.PH != nil || body.Raw.TDS != nil || body.Raw.Turbidity != nil
+	if hasRaw {
+		cal, err := s.getCalibration(ctx, body.DeviceID)
+		if err != nil {
+			return err
+		}
+		s.applyRawReadings(m, body.Raw.PH, body.Raw.TDS, body.Raw.Turbidity, cal)
+	} else {
+		m.Temperature = body.Data.Temperature
+		m.PH = body.Data.PH
+		m.Turbidity = body.Data.Turbidity
+		m.TDS = body.Data.TDS
 	}
 
 	if err := s.repo.SaveMeasurement(ctx, m); err != nil {
 		return fmt.Errorf("save measurement: %w", err)
 	}
 
-	// Cập nhật trạng thái device
 	s.updateDeviceSeen(ctx, body.DeviceID, "IDLE")
-
-	// Broadcast dữ liệu mới tới tất cả Client qua WebSocket
-	s.hub.Broadcast("sensor_data", m)
+	if s.hub != nil {
+		s.hub.Broadcast("sensor_data", m)
+	}
 	log.Printf("[Usecase] Đã lưu và broadcast kết quả đo từ [%s]", body.DeviceID)
+	return nil
+}
+
+func (s *Service) getCalibration(ctx context.Context, deviceID string) (*fish.DeviceCalibration, error) {
+	if s.calRepo == nil {
+		return fish.DefaultCalibration(deviceID), nil
+	}
+	cal, err := s.calRepo.GetCalibration(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	if cal == nil {
+		return fish.DefaultCalibration(deviceID), nil
+	}
+	return cal, nil
+}
+
+func (s *Service) applyRawReadings(
+	m *fish.Measurement,
+	phRaw, tdsRaw, turbRaw *rawReading,
+	cal *fish.DeviceCalibration,
+) {
+	if phRaw != nil {
+		m.PHAdc = &phRaw.ADC
+		m.PHVoltage = &phRaw.Voltage
+		ph := calibrate.CalcPH(phRaw.Voltage, cal.PHNeutralV, cal.PHSlope)
+		m.PH = &ph
+	}
+	if tdsRaw != nil {
+		m.TDSAdc = &tdsRaw.ADC
+		m.TDSVoltage = &tdsRaw.Voltage
+		tds := calibrate.CalcTDS(tdsRaw.Voltage, cal.TDSTempC)
+		m.TDS = &tds
+	}
+	if turbRaw != nil {
+		m.TurbidityAdc = &turbRaw.ADC
+		m.TurbidityVoltage = &turbRaw.Voltage
+		ntu := calibrate.CalcTurbidity(turbRaw.Voltage, cal.TurbVClear, cal.TurbVDirty, cal.TurbNTUMax)
+		m.Turbidity = &ntu
+	}
+}
+
+func (s *Service) GetCalibration(ctx context.Context, deviceID string) (*fish.DeviceCalibration, error) {
+	return s.getCalibration(ctx, deviceID)
+}
+
+func (s *Service) UpdateCalibration(ctx context.Context, cal *fish.DeviceCalibration) error {
+	if cal.DeviceID == "" {
+		return fmt.Errorf("device_id required")
+	}
+	if s.calRepo == nil {
+		return fmt.Errorf("calibration storage not configured")
+	}
+	cal.UpdatedAt = time.Now()
+	if err := s.calRepo.SaveCalibration(ctx, cal); err != nil {
+		return err
+	}
+	if s.hub != nil {
+		s.hub.Broadcast("calibration_updated", cal)
+	}
 	return nil
 }
 

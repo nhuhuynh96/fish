@@ -20,12 +20,19 @@ func NewStore(db *sql.DB) *Store {
 // MeasurementRepository
 func (s *Store) SaveMeasurement(ctx context.Context, m *fish.Measurement) error {
 	query := `
-		INSERT INTO measurements (id, device_id, timestamp, status, duration_ms, sensors, temperature, ph, turbidity, tds, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO measurements (
+			id, device_id, timestamp, status, duration_ms, sensors,
+			temperature, ph, turbidity, tds,
+			ph_adc, ph_voltage, tds_adc, tds_voltage, turbidity_adc, turbidity_voltage,
+			created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
 	_, err := s.db.ExecContext(ctx, query,
 		m.ID, m.DeviceID, m.Timestamp, m.Status, m.DurationMs,
-		pq.Array(m.Sensors), m.Temperature, m.PH, m.Turbidity, m.TDS, m.CreatedAt,
+		pq.Array(m.Sensors), m.Temperature, m.PH, m.Turbidity, m.TDS,
+		m.PHAdc, m.PHVoltage, m.TDSAdc, m.TDSVoltage, m.TurbidityAdc, m.TurbidityVoltage,
+		m.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert measurement: %w", err)
@@ -35,7 +42,10 @@ func (s *Store) SaveMeasurement(ctx context.Context, m *fish.Measurement) error 
 
 func (s *Store) GetLatestMeasurement(ctx context.Context, deviceID string) (*fish.Measurement, error) {
 	query := `
-		SELECT id, device_id, timestamp, status, duration_ms, sensors, temperature, ph, turbidity, tds, created_at
+		SELECT id, device_id, timestamp, status, duration_ms, sensors,
+		       temperature, ph, turbidity, tds,
+		       ph_adc, ph_voltage, tds_adc, tds_voltage, turbidity_adc, turbidity_voltage,
+		       created_at
 		FROM measurements
 		WHERE device_id = $1
 		ORDER BY created_at DESC
@@ -47,7 +57,9 @@ func (s *Store) GetLatestMeasurement(ctx context.Context, deviceID string) (*fis
 	var sensors []string
 	err := row.Scan(
 		&m.ID, &m.DeviceID, &m.Timestamp, &m.Status, &m.DurationMs,
-		pq.Array(&sensors), &m.Temperature, &m.PH, &m.Turbidity, &m.TDS, &m.CreatedAt,
+		pq.Array(&sensors), &m.Temperature, &m.PH, &m.Turbidity, &m.TDS,
+		&m.PHAdc, &m.PHVoltage, &m.TDSAdc, &m.TDSVoltage, &m.TurbidityAdc, &m.TurbidityVoltage,
+		&m.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -64,7 +76,10 @@ func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int
 		limit = 20
 	}
 	query := `
-		SELECT id, device_id, timestamp, status, duration_ms, sensors, temperature, ph, turbidity, tds, created_at
+		SELECT id, device_id, timestamp, status, duration_ms, sensors,
+		       temperature, ph, turbidity, tds,
+		       ph_adc, ph_voltage, tds_adc, tds_voltage, turbidity_adc, turbidity_voltage,
+		       created_at
 		FROM measurements
 		WHERE device_id = $1
 		ORDER BY created_at DESC
@@ -82,7 +97,9 @@ func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int
 		var sensors []string
 		if err := rows.Scan(
 			&m.ID, &m.DeviceID, &m.Timestamp, &m.Status, &m.DurationMs,
-			pq.Array(&sensors), &m.Temperature, &m.PH, &m.Turbidity, &m.TDS, &m.CreatedAt,
+			pq.Array(&sensors), &m.Temperature, &m.PH, &m.Turbidity, &m.TDS,
+			&m.PHAdc, &m.PHVoltage, &m.TDSAdc, &m.TDSVoltage, &m.TurbidityAdc, &m.TurbidityVoltage,
+			&m.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -90,6 +107,55 @@ func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int
 		list = append(list, m)
 	}
 	return list, nil
+}
+
+func (s *Store) GetCalibration(ctx context.Context, deviceID string) (*fish.DeviceCalibration, error) {
+	query := `
+		SELECT device_id, ph_neutral_v, ph_slope, tds_temp_c,
+		       turb_v_clear, turb_v_dirty, turb_ntu_max, updated_at
+		FROM device_calibration
+		WHERE device_id = $1
+	`
+	row := s.db.QueryRowContext(ctx, query, deviceID)
+
+	var cal fish.DeviceCalibration
+	err := row.Scan(
+		&cal.DeviceID, &cal.PHNeutralV, &cal.PHSlope, &cal.TDSTempC,
+		&cal.TurbVClear, &cal.TurbVDirty, &cal.TurbNTUMax, &cal.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query calibration: %w", err)
+	}
+	return &cal, nil
+}
+
+func (s *Store) SaveCalibration(ctx context.Context, cal *fish.DeviceCalibration) error {
+	query := `
+		INSERT INTO device_calibration (
+			device_id, ph_neutral_v, ph_slope, tds_temp_c,
+			turb_v_clear, turb_v_dirty, turb_ntu_max, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (device_id) DO UPDATE SET
+			ph_neutral_v = EXCLUDED.ph_neutral_v,
+			ph_slope = EXCLUDED.ph_slope,
+			tds_temp_c = EXCLUDED.tds_temp_c,
+			turb_v_clear = EXCLUDED.turb_v_clear,
+			turb_v_dirty = EXCLUDED.turb_v_dirty,
+			turb_ntu_max = EXCLUDED.turb_ntu_max,
+			updated_at = EXCLUDED.updated_at
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		cal.DeviceID, cal.PHNeutralV, cal.PHSlope, cal.TDSTempC,
+		cal.TurbVClear, cal.TurbVDirty, cal.TurbNTUMax, cal.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert calibration: %w", err)
+	}
+	return nil
 }
 
 // EventRepository

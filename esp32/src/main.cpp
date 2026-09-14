@@ -137,8 +137,8 @@ void setup() {
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-    // Khởi tạo module lấy mẫu với bơm và phao thật
-    samplingManager.begin(false);
+    // Khởi tạo SamplingManager (phần cứng thật)
+    samplingManager.begin();
 
     // Đọc cấu hình đã lưu
     bool hasConfig = configManager.loadConfig(currentConfig);

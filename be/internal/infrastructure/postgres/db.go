@@ -59,10 +59,27 @@ func initSchema(db *sql.DB) error {
 		ph DOUBLE PRECISION,
 		turbidity DOUBLE PRECISION,
 		tds DOUBLE PRECISION,
+		ph_adc INT,
+		ph_voltage DOUBLE PRECISION,
+		tds_adc INT,
+		tds_voltage DOUBLE PRECISION,
+		turbidity_adc INT,
+		turbidity_voltage DOUBLE PRECISION,
 		created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_measurements_device_created ON measurements (device_id, created_at DESC);
+
+	CREATE TABLE IF NOT EXISTS device_calibration (
+		device_id VARCHAR(64) PRIMARY KEY,
+		ph_neutral_v DOUBLE PRECISION NOT NULL DEFAULT 2.50,
+		ph_slope DOUBLE PRECISION NOT NULL DEFAULT 0.18,
+		tds_temp_c DOUBLE PRECISION NOT NULL DEFAULT 25.0,
+		turb_v_clear DOUBLE PRECISION NOT NULL DEFAULT 2.15,
+		turb_v_dirty DOUBLE PRECISION NOT NULL DEFAULT 1.00,
+		turb_ntu_max DOUBLE PRECISION NOT NULL DEFAULT 1000.0,
+		updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+	);
 
 	CREATE TABLE IF NOT EXISTS sampling_events (
 		id VARCHAR(64) PRIMARY KEY,
@@ -79,6 +96,21 @@ func initSchema(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+
+	migrations := []string{
+		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS ph_adc INT`,
+		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS ph_voltage DOUBLE PRECISION`,
+		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS tds_adc INT`,
+		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS tds_voltage DOUBLE PRECISION`,
+		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS turbidity_adc INT`,
+		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS turbidity_voltage DOUBLE PRECISION`,
+	}
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil {
+			return err
+		}
+	}
+
 	log.Println("[PostgreSQL] Đã khởi tạo bảng và index thành công!")
 	return nil
 }
