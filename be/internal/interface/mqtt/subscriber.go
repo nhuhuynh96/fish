@@ -31,8 +31,11 @@ func (s *Subscriber) Start() error {
 	if err := s.client.Subscribe("fish/+/telemetry", s.onTelemetry); err != nil {
 		return err
 	}
+	if err := s.client.Subscribe("fish/+/log", s.onDeviceLog); err != nil {
+		return err
+	}
 
-	log.Println("[MQTT Subscriber] Subscribed to fish/+/sensor_data, fish/+/event, fish/+/status, fish/+/telemetry")
+	log.Println("[MQTT Subscriber] Subscribed to fish/+/sensor_data, fish/+/event, fish/+/status, fish/+/telemetry, fish/+/log")
 	return nil
 }
 
@@ -73,6 +76,16 @@ func (s *Subscriber) onTelemetry(topic string, payload []byte) {
 	}
 	if err := s.svc.HandleTelemetry(context.Background(), deviceID, payload); err != nil {
 		log.Printf("[MQTT] handle telemetry error: %v", err)
+	}
+}
+
+func (s *Subscriber) onDeviceLog(topic string, payload []byte) {
+	deviceID := extractDeviceID(topic)
+	if deviceID == "" {
+		return
+	}
+	if err := s.svc.HandleDeviceLog(context.Background(), deviceID, payload); err != nil {
+		log.Printf("[MQTT] handle device log error: %v", err)
 	}
 }
 

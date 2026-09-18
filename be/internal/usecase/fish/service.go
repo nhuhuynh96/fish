@@ -13,6 +13,10 @@ import (
 	"github.com/nhuhuynh/iot-fish/internal/pkg/calibrate"
 )
 
+type ScheduleRegistrar interface {
+	EnsureDevice(deviceID string)
+}
+
 type Service struct {
 	repo      fish.MeasurementRepository
 	eventRepo fish.EventRepository
@@ -20,6 +24,7 @@ type Service struct {
 	calRepo   fish.CalibrationRepository
 	pub       fish.CommandPublisher
 	hub       fish.EventHub
+	sched     ScheduleRegistrar
 }
 
 func NewService(
@@ -40,6 +45,10 @@ func NewService(
 	}
 }
 
+func (s *Service) SetScheduleRegistrar(sched ScheduleRegistrar) {
+	s.sched = sched
+}
+
 // 1. Kích hoạt đo lường từ Backend
 func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, sensors []string) error {
 	if len(sensors) == 0 {
@@ -51,8 +60,17 @@ func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, senso
 
 // 2. Điều khiển bơm nạp / xả thủ công
 func (s *Service) SetPump(ctx context.Context, deviceID string, target string, state bool) error {
-	log.Printf("[Usecase] Điều khiển bơm [%s] trên device [%s]: state=%v", target, deviceID, state)
-	return s.pub.PublishPump(ctx, deviceID, target, state)
+	t := strings.ToLower(strings.TrimSpace(target))
+	if t != "inlet" && t != "drain" {
+		return fmt.Errorf("pump target must be \"inlet\" or \"drain\", got %q", target)
+	}
+	log.Printf("[Usecase] Điều khiển bơm [%s] trên device [%s]: state=%v", t, deviceID, state)
+	return s.pub.PublishPump(ctx, deviceID, t, state)
+}
+
+func (s *Service) ClearQueue(ctx context.Context, deviceID string) error {
+	log.Printf("[Usecase] Xóa hàng đợi trên device [%s]", deviceID)
+	return s.pub.PublishClearQueue(ctx, deviceID)
 }
 
 // 2b. Cấu hình lịch đo tự động
@@ -168,7 +186,7 @@ func (s *Service) applyRawReadings(
 	if tdsRaw != nil {
 		m.TDSAdc = &tdsRaw.ADC
 		m.TDSVoltage = &tdsRaw.Voltage
-		tds := calibrate.CalcTDS(tdsRaw.Voltage, cal.TDSTempC)
+		tds := calibrate.CalcTDS(tdsRaw.Voltage, cal.TDSTempC, cal.TDSRefV, cal.TDSRefPPM, cal.TDSMaxPPM)
 		m.TDS = &tds
 	}
 	if turbRaw != nil {
@@ -270,6 +288,10 @@ func (s *Service) HandleStatus(ctx context.Context, deviceID string, payload []b
 		return err
 	}
 
+	if s.sched != nil {
+		s.sched.EnsureDevice(deviceID)
+	}
+
 	s.hub.Broadcast("device_status", d)
 	log.Printf("[Usecase] Device [%s] status: online=%v", deviceID, online)
 	return nil
@@ -301,7 +323,43 @@ func (s *Service) HandleTelemetry(ctx context.Context, deviceID string, payload 
 		return err
 	}
 
+	if s.sched != nil {
+		s.sched.EnsureDevice(deviceID)
+	}
+
 	s.hub.Broadcast("device_status", d)
+	return nil
+}
+
+// 7. Xử lý Serial log từ ESP32 (topic fish/+/log) — chỉ broadcast realtime, không lưu DB
+func (s *Service) HandleDeviceLog(ctx context.Context, deviceID string, payload []byte) error {
+	var body struct {
+		DeviceID string `json:"device_id"`
+		UptimeMs int64  `json:"uptime_ms"`
+		Msg      string `json:"msg"`
+	}
+
+	if err := json.Unmarshal(payload, &body); err != nil {
+		// Fallback: payload plain text
+		body.Msg = strings.TrimSpace(string(payload))
+	}
+	if body.DeviceID == "" {
+		body.DeviceID = deviceID
+	}
+	if body.Msg == "" {
+		return nil
+	}
+
+	entry := map[string]any{
+		"device_id":  body.DeviceID,
+		"uptime_ms":  body.UptimeMs,
+		"msg":        body.Msg,
+		"created_at": time.Now(),
+	}
+
+	if s.hub != nil {
+		s.hub.Broadcast("device_log", entry)
+	}
 	return nil
 }
 
@@ -316,6 +374,9 @@ func (s *Service) updateDeviceSeen(ctx context.Context, deviceID string, state s
 		d.State = state
 	}
 	_ = s.devRepo.UpsertDevice(ctx, d)
+	if s.sched != nil {
+		s.sched.EnsureDevice(deviceID)
+	}
 }
 
 func (s *Service) GetLatest(ctx context.Context, deviceID string) (*fish.Measurement, error) {

@@ -75,6 +75,9 @@ func initSchema(db *sql.DB) error {
 		ph_neutral_v DOUBLE PRECISION NOT NULL DEFAULT 2.50,
 		ph_slope DOUBLE PRECISION NOT NULL DEFAULT 0.18,
 		tds_temp_c DOUBLE PRECISION NOT NULL DEFAULT 25.0,
+		tds_ref_v DOUBLE PRECISION NOT NULL DEFAULT 0,
+		tds_ref_ppm DOUBLE PRECISION NOT NULL DEFAULT 0,
+		tds_max_ppm DOUBLE PRECISION NOT NULL DEFAULT 2000.0,
 		turb_v_clear DOUBLE PRECISION NOT NULL DEFAULT 2.15,
 		turb_v_dirty DOUBLE PRECISION NOT NULL DEFAULT 1.00,
 		turb_ntu_max DOUBLE PRECISION NOT NULL DEFAULT 1000.0,
@@ -104,6 +107,9 @@ func initSchema(db *sql.DB) error {
 		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS tds_voltage DOUBLE PRECISION`,
 		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS turbidity_adc INT`,
 		`ALTER TABLE measurements ADD COLUMN IF NOT EXISTS turbidity_voltage DOUBLE PRECISION`,
+		`ALTER TABLE device_calibration ADD COLUMN IF NOT EXISTS tds_ref_v DOUBLE PRECISION NOT NULL DEFAULT 0`,
+		`ALTER TABLE device_calibration ADD COLUMN IF NOT EXISTS tds_ref_ppm DOUBLE PRECISION NOT NULL DEFAULT 0`,
+		`ALTER TABLE device_calibration ADD COLUMN IF NOT EXISTS tds_max_ppm DOUBLE PRECISION NOT NULL DEFAULT 2000.0`,
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil {

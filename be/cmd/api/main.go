@@ -73,13 +73,22 @@ func main() {
 	// 4. Khởi tạo Core Service (Usecase Layer)
 	fishSvc := fishuc.NewService(measRepo, eventRepo, devRepo, calRepo, pub, hub)
 
-	// 4b. Khởi tạo Bộ Lập Lịch Cronjob Tập Trung tại Backend
 	sched := scheduler.NewScheduler(fishSvc)
-	// Mặc định cấu hình lịch đo chuẩn cho thiết bị ESP32 (Temp: 60s, pH: 120s, Turb: 180s, TDS: 300s)
-	sched.SetDeviceSchedule("esp32_4b70", true, 60, 120, 180, 300)
 	sched.Start()
 	defer sched.Stop()
 
+	// Đăng ký lịch mặc định (Auto TẮT) cho mọi device đã có trong DB — không hardcode ID
+	if devices, err := fishSvc.ListDevices(context.Background()); err != nil {
+		log.Printf("[Scheduler] Không load được danh sách device: %v", err)
+	} else {
+		for _, d := range devices {
+			sched.EnsureDevice(d.ID)
+		}
+		log.Printf("[Scheduler] Đã đăng ký lịch mặc định cho %d device từ DB", len(devices))
+	}
+
+	// Khi ESP32 online / telemetry → tự thêm vào scheduler nếu chưa có
+	fishSvc.SetScheduleRegistrar(sched)
 	// 5. Khởi động MQTT Subscriber lắng nghe các topic từ ESP32
 	if mqttClient != nil {
 		sub := mqttiface.NewSubscriber(mqttClient, fishSvc)

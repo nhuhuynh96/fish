@@ -2,6 +2,7 @@ package handler
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nhuhuynh/iot-fish/internal/infrastructure/scheduler"
@@ -64,7 +65,13 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.SetPump(c.Request.Context(), deviceID, req.Target, req.State); err != nil {
+	target := strings.ToLower(strings.TrimSpace(req.Target))
+	if target != "inlet" && target != "drain" {
+		respond.BadRequest(c, "target must be \"inlet\" or \"drain\"")
+		return
+	}
+
+	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State); err != nil {
 		respond.InternalError(c, err.Error())
 		return
 	}
@@ -72,8 +79,27 @@ func (h *FishHandler) Pump(c *gin.Context) {
 	respond.OK(c, gin.H{
 		"message": "Pump command sent",
 		"device":  deviceID,
-		"target":  req.Target,
+		"target":  target,
 		"state":   req.State,
+	})
+}
+
+// 2a. Xóa toàn bộ hàng đợi lệnh trên ESP32
+func (h *FishHandler) ClearQueue(c *gin.Context) {
+	deviceID := c.Param("id")
+	if deviceID == "" {
+		respond.BadRequest(c, "missing device id")
+		return
+	}
+
+	if err := h.svc.ClearQueue(c.Request.Context(), deviceID); err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+
+	respond.OK(c, gin.H{
+		"message": "Clear queue command sent",
+		"device":  deviceID,
 	})
 }
 
@@ -112,6 +138,7 @@ func (h *FishHandler) SetSchedule(c *gin.Context) {
 	}
 
 	if h.sched != nil {
+		h.sched.EnsureDevice(deviceID)
 		h.sched.SetDeviceSchedule(deviceID, req.AutoEnabled, req.TempInterval, req.PhInterval, req.TurbInterval, req.TdsInterval)
 	}
 
@@ -128,6 +155,49 @@ func (h *FishHandler) SetSchedule(c *gin.Context) {
 		"ph_interval":   req.PhInterval,
 		"turb_interval": req.TurbInterval,
 		"tds_interval":  req.TdsInterval,
+	})
+}
+
+// 2b2. Lấy cấu hình lịch đo hiện tại từ backend scheduler
+func (h *FishHandler) GetSchedule(c *gin.Context) {
+	deviceID := c.Param("id")
+	if deviceID == "" {
+		respond.BadRequest(c, "missing device id")
+		return
+	}
+
+	if h.sched == nil {
+		respond.OK(c, gin.H{
+			"device_id":     deviceID,
+			"auto_enabled":  false,
+			"temp_interval": 60,
+			"ph_interval":   120,
+			"turb_interval": 180,
+			"tds_interval":  300,
+		})
+		return
+	}
+
+	sched := h.sched.GetDeviceSchedule(deviceID)
+	if sched == nil {
+		respond.OK(c, gin.H{
+			"device_id":     deviceID,
+			"auto_enabled":  false,
+			"temp_interval": 60,
+			"ph_interval":   120,
+			"turb_interval": 180,
+			"tds_interval":  300,
+		})
+		return
+	}
+
+	respond.OK(c, gin.H{
+		"device_id":     deviceID,
+		"auto_enabled":  sched.AutoEnabled,
+		"temp_interval": int(sched.TempInterval.Seconds()),
+		"ph_interval":   int(sched.PhInterval.Seconds()),
+		"turb_interval": int(sched.TurbInterval.Seconds()),
+		"tds_interval":  int(sched.TdsInterval.Seconds()),
 	})
 }
 
@@ -221,12 +291,15 @@ func (h *FishHandler) GetCalibration(c *gin.Context) {
 func (h *FishHandler) UpdateCalibration(c *gin.Context) {
 	deviceID := c.Param("id")
 	var req struct {
-		PHNeutralV float64 `json:"ph_neutral_v"`
-		PHSlope    float64 `json:"ph_slope"`
-		TDSTempC   float64 `json:"tds_temp_c"`
-		TurbVClear float64 `json:"turb_v_clear"`
-		TurbVDirty float64 `json:"turb_v_dirty"`
-		TurbNTUMax float64 `json:"turb_ntu_max"`
+		PHNeutralV *float64 `json:"ph_neutral_v"`
+		PHSlope    *float64 `json:"ph_slope"`
+		TDSTempC   *float64 `json:"tds_temp_c"`
+		TDSRefV    *float64 `json:"tds_ref_v"`
+		TDSRefPPM  *float64 `json:"tds_ref_ppm"`
+		TDSMaxPPM  *float64 `json:"tds_max_ppm"`
+		TurbVClear *float64 `json:"turb_v_clear"`
+		TurbVDirty *float64 `json:"turb_v_dirty"`
+		TurbNTUMax *float64 `json:"turb_ntu_max"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respond.BadRequest(c, "invalid body")
@@ -238,23 +311,32 @@ func (h *FishHandler) UpdateCalibration(c *gin.Context) {
 		respond.InternalError(c, err.Error())
 		return
 	}
-	if req.PHNeutralV > 0 {
-		cal.PHNeutralV = req.PHNeutralV
+	if req.PHNeutralV != nil && *req.PHNeutralV > 0 {
+		cal.PHNeutralV = *req.PHNeutralV
 	}
-	if req.PHSlope > 0 {
-		cal.PHSlope = req.PHSlope
+	if req.PHSlope != nil && *req.PHSlope > 0 {
+		cal.PHSlope = *req.PHSlope
 	}
-	if req.TDSTempC > 0 {
-		cal.TDSTempC = req.TDSTempC
+	if req.TDSTempC != nil && *req.TDSTempC > 0 {
+		cal.TDSTempC = *req.TDSTempC
 	}
-	if req.TurbVClear > 0 {
-		cal.TurbVClear = req.TurbVClear
+	if req.TDSRefV != nil {
+		cal.TDSRefV = *req.TDSRefV
 	}
-	if req.TurbVDirty > 0 {
-		cal.TurbVDirty = req.TurbVDirty
+	if req.TDSRefPPM != nil {
+		cal.TDSRefPPM = *req.TDSRefPPM
 	}
-	if req.TurbNTUMax > 0 {
-		cal.TurbNTUMax = req.TurbNTUMax
+	if req.TDSMaxPPM != nil && *req.TDSMaxPPM > 0 {
+		cal.TDSMaxPPM = *req.TDSMaxPPM
+	}
+	if req.TurbVClear != nil && *req.TurbVClear > 0 {
+		cal.TurbVClear = *req.TurbVClear
+	}
+	if req.TurbVDirty != nil && *req.TurbVDirty > 0 {
+		cal.TurbVDirty = *req.TurbVDirty
+	}
+	if req.TurbNTUMax != nil && *req.TurbNTUMax > 0 {
+		cal.TurbNTUMax = *req.TurbNTUMax
 	}
 
 	if err := h.svc.UpdateCalibration(c.Request.Context(), cal); err != nil {

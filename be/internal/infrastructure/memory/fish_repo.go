@@ -36,14 +36,47 @@ func (s *Store) SaveMeasurement(ctx context.Context, m *fish.Measurement) error 
 }
 
 func (s *Store) GetLatestMeasurement(ctx context.Context, deviceID string) (*fish.Measurement, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	list, ok := s.measurements[deviceID]
-	if !ok || len(list) == 0 {
+	list, err := s.ListMeasurements(ctx, deviceID, 20)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) == 0 {
 		return nil, nil
 	}
-	res := list[0]
-	return &res, nil
+
+	merged := list[0]
+	sensors := make([]string, 0, 4)
+	seen := map[string]bool{}
+
+	for i := range list {
+		m := &list[i]
+		if m.Temperature != nil && merged.Temperature == nil {
+			merged.Temperature = m.Temperature
+		}
+		if m.PH != nil && merged.PH == nil {
+			merged.PH = m.PH
+			merged.PHAdc = m.PHAdc
+			merged.PHVoltage = m.PHVoltage
+		}
+		if m.TDS != nil && merged.TDS == nil {
+			merged.TDS = m.TDS
+			merged.TDSAdc = m.TDSAdc
+			merged.TDSVoltage = m.TDSVoltage
+		}
+		if m.Turbidity != nil && merged.Turbidity == nil {
+			merged.Turbidity = m.Turbidity
+			merged.TurbidityAdc = m.TurbidityAdc
+			merged.TurbidityVoltage = m.TurbidityVoltage
+		}
+		for _, name := range m.Sensors {
+			if !seen[name] {
+				seen[name] = true
+				sensors = append(sensors, name)
+			}
+		}
+	}
+	merged.Sensors = sensors
+	return &merged, nil
 }
 
 func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int) ([]fish.Measurement, error) {

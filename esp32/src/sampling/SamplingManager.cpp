@@ -1,6 +1,7 @@
 #include "SamplingManager.h"
 #include "../mqtt/MQTTHandler.h"
 #include "../config/ConfigManager.h"
+#include "../log/RemoteLog.h"
 
 SamplingManager samplingManager;
 
@@ -9,7 +10,8 @@ SamplingManager::SamplingManager() {}
 void SamplingManager::begin() {
     currentState = STATE_IDLE;
     stateTimer = millis();
-    while (!commandQueue.empty()) commandQueue.pop();
+    fillFailCount = 0;
+    clearCommandQueue();
 
     pinMode(INLET_PUMP_PIN, OUTPUT);
     digitalWrite(INLET_PUMP_PIN, PUMP_OFF_LEVEL);
@@ -17,27 +19,27 @@ void SamplingManager::begin() {
     digitalWrite(DRAIN_VALVE_PIN, PUMP_OFF_LEVEL);
     pinMode(FLOAT_FULL_PIN, INPUT_PULLUP);
     pinMode(FLOAT_EMPTY_PIN, INPUT_PULLUP);
-    Serial.println("[Sampling] Relay: bơm=GPIO18, van=GPIO19 | Phao: đầy=GPIO4, cạn=GPIO17");
+    LOGLN("[Sampling] Relay: bơm=GPIO18, van=GPIO19 | Phao: đầy=GPIO4, cạn=GPIO17");
 
     pinMode(TDS_SENSOR_PIN, INPUT);
     analogReadResolution(12);
     analogSetPinAttenuation(TDS_SENSOR_PIN, ADC_11db);
-    Serial.println("[Sampling] TDS Meter V1.0 gắn GPIO35 (ADC1).");
+    LOGLN("[Sampling] TDS Meter V1.0 gắn GPIO35 (ADC1).");
 
     pinMode(TURBIDITY_SENSOR_PIN, INPUT);
     analogSetPinAttenuation(TURBIDITY_SENSOR_PIN, ADC_11db);
-    Serial.println("[Sampling] Turbidity analog gắn GPIO34 (ADC1).");
+    LOGLN("[Sampling] Turbidity analog gắn GPIO34 (ADC1).");
 
     pinMode(PH_SENSOR_PIN, INPUT);
     analogSetPinAttenuation(PH_SENSOR_PIN, ADC_11db);
-    Serial.println("[Sampling] PH-4502C gắn GPIO32 (Po). V+ dùng 5V, hiệu chuẩn POT gần BNC.");
+    LOGLN("[Sampling] PH-4502C gắn GPIO32 (Po). V+ dùng 5V, hiệu chuẩn POT gần BNC.");
 
     pinMode(PH_POWER_PIN, OUTPUT);
     pinMode(TURBIDITY_POWER_PIN, OUTPUT);
     pinMode(TDS_POWER_PIN, OUTPUT);
     powerOffAllSensors();
-    Serial.println("[Sampling] Power: pH=GPIO14, Turbidity=GPIO33, TDS=GPIO25 (2N3904).");
-    Serial.println("[Sampling] FSM: 1 sensor = 1 commandQueue | xả khi queue rỗng | raw ADC→backend cal");
+    LOGLN("[Sampling] Power: pH=GPIO14, Turbidity=GPIO33, TDS=GPIO25 (2N3904).");
+    LOGLN("[Sampling] FSM: measure = đo thẳng (không bơm/xả) | pump thủ công: phao hoặc 60s");
 }
 
 String SamplingManager::getStateName() const {
@@ -119,7 +121,7 @@ void SamplingManager::expandSensorTokens(const std::vector<String> &sensors, std
 }
 
 void SamplingManager::emitEvent(const String &stage, const String &message, const String &extraJson) {
-    Serial.printf("[Sampling Event] [%s] %s\n", stage.c_str(), message.c_str());
+    LOGF("[Sampling Event] [%s] %s\n", stage.c_str(), message.c_str());
 
     if (mqttHandler.isConnected()) {
         String payload = "{\"device_id\":\"" + currentConfig.device_id + "\",";
@@ -148,7 +150,7 @@ void SamplingManager::setInletPump(bool enabled) {
     }
 
     digitalWrite(INLET_PUMP_PIN, enabled ? PUMP_ON_LEVEL : PUMP_OFF_LEVEL);
-    Serial.println(enabled ? "[Pump] BẬT bơm nạp (GPIO18)" : "[Pump] TẮT bơm nạp (GPIO18)");
+    LOGLN(enabled ? "[Pump] BẬT bơm nạp (GPIO18)" : "[Pump] TẮT bơm nạp (GPIO18)");
 }
 
 void SamplingManager::setDrainValve(bool enabled) {
@@ -157,7 +159,7 @@ void SamplingManager::setDrainValve(bool enabled) {
     }
 
     digitalWrite(DRAIN_VALVE_PIN, enabled ? PUMP_ON_LEVEL : PUMP_OFF_LEVEL);
-    Serial.println(enabled ? "[Valve] BẬT van xả (GPIO19)" : "[Valve] TẮT van xả (GPIO19)");
+    LOGLN(enabled ? "[Valve] BẬT van xả (GPIO19)" : "[Valve] TẮT van xả (GPIO19)");
 }
 
 void SamplingManager::powerOffAllSensors() {
@@ -191,7 +193,7 @@ void SamplingManager::setSensorPower(SensorType type, bool enabled) {
     }
 
     digitalWrite(pin, enabled ? SENSOR_POWER_ON : SENSOR_POWER_OFF);
-    Serial.printf("[Power] %s %s (GPIO%u)\n", name, enabled ? "BẬT" : "TẮT", pin);
+    LOGF("[Power] %s %s (GPIO%u)\n", name, enabled ? "BẬT" : "TẮT", pin);
 
     if (enabled) {
         delay(SENSOR_POWER_SETTLE_MS);
@@ -221,11 +223,13 @@ void SamplingManager::transitionTo(SamplingState newState) {
 
     if (newState == STATE_FILLING) {
         floatFullSince = 0;
+        manualInletActive = false; // FSM FILLING quản lý bơm
         setInletPump(!isWaterFull());
     }
 
     if (newState == STATE_DRAINING) {
         floatEmptySince = 0;
+        manualDrainActive = false;
         setDrainValve(!isWaterEmpty());
     }
 }
@@ -235,17 +239,20 @@ void SamplingManager::enqueueMeasure(const std::vector<String> &sensors) {
     expandSensorTokens(sensors, list);
 
     if (list.empty()) {
-        Serial.println("[Sampling] MEASURE không có cảm biến hợp lệ, bỏ qua.");
+        LOGLN("[Sampling] MEASURE không có cảm biến hợp lệ, bỏ qua.");
         emitEvent("command_error", "sensors không hợp lệ.");
         return;
     }
+
+    // Lệnh đo mới từ người dùng → cho phép thử bơm lại sau khi đã abort
+    fillFailCount = 0;
 
     for (SensorType t : list) {
         PendingCommand cmd;
         cmd.type = CMD_MEASURE;
         cmd.sensor = t;
         commandQueue.push(cmd);
-        Serial.printf(
+        LOGF(
             "[Sampling] Queue +MEASURE %s (queue=%u)\n",
             getSensorName(t).c_str(),
             (unsigned)commandQueue.size()
@@ -255,13 +262,22 @@ void SamplingManager::enqueueMeasure(const std::vector<String> &sensors) {
 }
 
 void SamplingManager::enqueuePump(const String &target, bool state) {
+    String t = target;
+    t.toLowerCase();
+    t.trim();
+    if (t != "inlet" && t != "drain") {
+        LOGLN("[Sampling] PUMP target không hợp lệ (chỉ inlet|drain), bỏ qua.");
+        emitEvent("command_error", "pump target phải là inlet hoặc drain.");
+        return;
+    }
+
     PendingCommand cmd;
     cmd.type = CMD_PUMP;
-    cmd.pumpTarget = target;
+    cmd.pumpTarget = t;
     cmd.pumpState = state;
     commandQueue.push(cmd);
-    Serial.printf("[Sampling] Queue +PUMP %s=%s (queue=%u)\n",
-                  target.c_str(), state ? "ON" : "OFF", (unsigned)commandQueue.size());
+    LOGF("[Sampling] Queue +PUMP %s=%s (queue=%u)\n",
+                  t.c_str(), state ? "ON" : "OFF", (unsigned)commandQueue.size());
     emitEvent("queued", "Đã xếp lệnh bơm vào commandQueue.");
 }
 
@@ -269,7 +285,25 @@ void SamplingManager::enqueueStatus() {
     PendingCommand cmd;
     cmd.type = CMD_STATUS;
     commandQueue.push(cmd);
-    Serial.printf("[Sampling] Queue +STATUS (queue=%u)\n", (unsigned)commandQueue.size());
+    LOGF("[Sampling] Queue +STATUS (queue=%u)\n", (unsigned)commandQueue.size());
+}
+
+void SamplingManager::clearQueue() {
+    size_t dropped = commandQueue.size();
+    clearCommandQueue();
+    fillFailCount = 0;
+    manualInletActive = false;
+    manualDrainActive = false;
+    powerOffAllSensors();
+    setInletPump(false);
+    setDrainValve(false);
+    transitionTo(STATE_IDLE);
+    LOGF("[Sampling] CLEAR QUEUE: đã hủy %u lệnh. IDLE.\n", (unsigned)dropped);
+    emitEvent(
+        "queue_cleared",
+        "Đã xóa toàn bộ hàng đợi (" + String((unsigned)dropped) +
+            " lệnh). Tắt bơm/van, về IDLE."
+    );
 }
 
 void SamplingManager::publishStatus() {
@@ -280,7 +314,7 @@ void SamplingManager::publishStatus() {
     statusJson += "\"queue_size\":" + String((unsigned)commandQueue.size());
     statusJson += "}";
 
-    Serial.println("[Sampling] Status: " + statusJson);
+    LOGLN("[Sampling] Status: " + statusJson);
     if (mqttHandler.isConnected()) {
         mqttHandler.publish("status", statusJson);
     }
@@ -296,17 +330,17 @@ void SamplingManager::processCommandQueue() {
 
     switch (cmd.type) {
         case CMD_MEASURE:
-            Serial.printf("[Sampling] Chạy MEASURE [%s] (còn lại queue=%u)\n",
+            LOGF("[Sampling] Chạy MEASURE [%s] (còn lại queue=%u)\n",
                           getSensorName(cmd.sensor).c_str(),
                           (unsigned)commandQueue.size());
             startMeasureCycle(cmd.sensor);
             break;
         case CMD_PUMP:
-            Serial.println("[Sampling] Chạy PUMP từ hàng đợi");
+            LOGLN("[Sampling] Chạy PUMP từ hàng đợi");
             setManualPump(cmd.pumpTarget, cmd.pumpState);
             break;
         case CMD_STATUS:
-            Serial.println("[Sampling] Chạy STATUS từ hàng đợi");
+            LOGLN("[Sampling] Chạy STATUS từ hàng đợi");
             publishStatus();
             break;
     }
@@ -317,54 +351,105 @@ void SamplingManager::startMeasureCycle(SensorType sensor) {
     currentResult = SensorResult();
     currentResult.startTime = millis();
 
-    Serial.printf("\n[Sampling] >>> BẮT ĐẦU ĐO [%s] <<<\n", getSensorName(sensor).c_str());
-
-    if (!isWaterFull()) {
-        emitEvent("filling", "Nước chưa đầy. Bắt đầu bơm nạp...");
-        transitionTo(STATE_FILLING);
-    } else {
-        emitEvent("stabilizing", "Nước đã đầy. Chờ ổn định rồi đo...");
-        transitionTo(STATE_STABILIZING);
-    }
+    LOGF("\n[Sampling] >>> BẮT ĐẦU ĐO [%s] (không kiểm tra mực nước) <<<\n",
+         getSensorName(sensor).c_str());
+    emitEvent("stabilizing", "Bắt đầu đo cảm biến (bơm/xả do lệnh thủ công riêng).");
+    transitionTo(STATE_STABILIZING);
 }
 
 void SamplingManager::setManualPump(const String &target, bool state) {
     String t = target;
     t.toLowerCase();
-    if (t == "inlet" || t == "nap" || t == "vao") {
+    t.trim();
+
+    if (t == "inlet") {
         if (state && isWaterFull()) {
             setInletPump(false);
-            Serial.println("[Sampling] [Manual] Từ chối bật bơm: phao đang báo đầy.");
+            manualInletActive = false;
+            LOGLN("[Sampling] [Manual] Từ chối bật bơm: phao đang báo đầy.");
             emitEvent("manual_pump", "Không bật bơm vì phao đang báo nước đầy.");
             return;
         }
 
         setInletPump(state);
-        Serial.printf("[Sampling] [Manual] Bơm nạp: %s\n", state ? "BẬT" : "TẮT");
+        manualInletActive = state;
+        if (state) {
+            manualInletSince = millis();
+            LOGF("[Sampling] [Manual] Bơm nạp: BẬT (tắt khi phao đầy hoặc sau %lus)\n",
+                 MAX_MANUAL_PUMP_TIME / 1000UL);
+        } else {
+            LOGLN("[Sampling] [Manual] Bơm nạp: TẮT");
+        }
         emitEvent("manual_pump", String("Bơm nạp nước: ") + (state ? "BẬT" : "TẮT"));
-    } else if (t == "drain" || t == "xa" || t == "ra" || t == "valve") {
+        return;
+    }
+
+    if (t == "drain") {
         if (state && isWaterEmpty()) {
             setDrainValve(false);
-            Serial.println("[Sampling] [Manual] Từ chối mở van: phao đang báo cạn.");
+            manualDrainActive = false;
+            LOGLN("[Sampling] [Manual] Từ chối mở van: phao đang báo cạn.");
             emitEvent("manual_pump", "Không mở van xả vì phao đang báo nước cạn.");
             return;
         }
 
         setDrainValve(state);
-        Serial.printf("[Sampling] [Manual] Van xả: %s\n", state ? "BẬT" : "TẮT");
+        manualDrainActive = state;
+        if (state) {
+            manualDrainSince = millis();
+            LOGF("[Sampling] [Manual] Van xả: BẬT (tắt khi phao cạn hoặc sau %lus)\n",
+                 MAX_MANUAL_PUMP_TIME / 1000UL);
+        } else {
+            LOGLN("[Sampling] [Manual] Van xả: TẮT");
+        }
         emitEvent("manual_pump", String("Van xả nước: ") + (state ? "BẬT" : "TẮT"));
+        return;
+    }
+
+    LOGLN("[Sampling] [Manual] target không hợp lệ (chỉ inlet|drain).");
+    emitEvent("command_error", "pump target phải là inlet hoặc drain.");
+}
+
+void SamplingManager::handleManualPumpTimeouts() {
+    // Bơm/xả thủ công độc lập với chu trình đo
+    if (manualInletActive) {
+        if (isWaterFull()) {
+            setInletPump(false);
+            manualInletActive = false;
+            LOGLN("[Sampling] [Manual] Phao đầy → tắt bơm nạp.");
+            emitEvent("manual_pump", "Phao đầy. Đã tự tắt bơm nạp.");
+        } else if (millis() - manualInletSince >= MAX_MANUAL_PUMP_TIME) {
+            setInletPump(false);
+            manualInletActive = false;
+            LOGLN("[Sampling] [Manual] Hết 60s → tắt bơm nạp (an toàn).");
+            emitEvent("manual_pump_timeout", "Bơm nạp thủ công quá 60s. Đã tự tắt.");
+        }
+    }
+
+    if (manualDrainActive) {
+        if (isWaterEmpty()) {
+            setDrainValve(false);
+            manualDrainActive = false;
+            LOGLN("[Sampling] [Manual] Phao cạn → tắt van xả.");
+            emitEvent("manual_pump", "Phao cạn. Đã tự tắt van xả.");
+        } else if (millis() - manualDrainSince >= MAX_MANUAL_PUMP_TIME) {
+            setDrainValve(false);
+            manualDrainActive = false;
+            LOGLN("[Sampling] [Manual] Hết 60s → tắt van xả (an toàn).");
+            emitEvent("manual_pump_timeout", "Van xả thủ công quá 60s. Đã tự tắt.");
+        }
     }
 }
 
 void SamplingManager::measureSensor(SensorType type) {
     switch (type) {
         case SENSOR_TEMP: {
-            Serial.println("[Sampling] [Temp] Bỏ qua: chưa có cảm biến nhiệt độ.");
+            LOGLN("[Sampling] [Temp] Bỏ qua: chưa có cảm biến nhiệt độ.");
             emitEvent("measuring_sensor", "Bỏ qua nhiệt độ (chưa có sensor phần cứng).");
             break;
         }
         case SENSOR_PH: {
-            Serial.println("[Sampling] [PH-4502C] -> Bật transistor GPIO14, đọc ADC GPIO32...");
+            LOGLN("[Sampling] [PH-4502C] -> Bật transistor GPIO14, đọc ADC GPIO32...");
             setSensorPower(SENSOR_PH, true);
             currentResult.phRaw = readRawADC(PH_SENSOR_PIN, PH_SAMPLE_COUNT);
             setSensorPower(SENSOR_PH, false);
@@ -373,7 +458,7 @@ void SamplingManager::measureSensor(SensorType type) {
             break;
         }
         case SENSOR_TURBIDITY: {
-            Serial.println("[Sampling] [Turbidity] -> Bật transistor GPIO33, đọc ADC GPIO34...");
+            LOGLN("[Sampling] [Turbidity] -> Bật transistor GPIO33, đọc ADC GPIO34...");
             setSensorPower(SENSOR_TURBIDITY, true);
             currentResult.turbidityRaw = readRawADC(TURBIDITY_SENSOR_PIN, TURBIDITY_SAMPLE_COUNT);
             setSensorPower(SENSOR_TURBIDITY, false);
@@ -382,7 +467,7 @@ void SamplingManager::measureSensor(SensorType type) {
             break;
         }
         case SENSOR_TDS: {
-            Serial.println("[Sampling] [TDS] -> Bật transistor GPIO25, đọc ADC GPIO35...");
+            LOGLN("[Sampling] [TDS] -> Bật transistor GPIO25, đọc ADC GPIO35...");
             setSensorPower(SENSOR_TDS, true);
             currentResult.tdsRaw = readRawADC(TDS_SENSOR_PIN, TDS_SAMPLE_COUNT);
             setSensorPower(SENSOR_TDS, false);
@@ -413,8 +498,8 @@ void SamplingManager::publishSensorReading(SensorType type) {
     payload += "}";
     payload += "}";
 
-    Serial.println("\n[Sampling] >>> GỬI sensor_data NGAY <<<");
-    Serial.println(payload);
+    LOGLN("\n[Sampling] >>> GỬI sensor_data NGAY <<<");
+    LOGLN(payload);
 
     if (mqttHandler.isConnected()) {
         mqttHandler.publish("sensor_data", payload);
@@ -437,19 +522,17 @@ void SamplingManager::publishSensorReading(SensorType type) {
 }
 
 void SamplingManager::finishCycle() {
-    // Đã publish ngay trong measureSensor — đây chỉ quyết định xả hay lấy lệnh tiếp
+    // Measure không còn tự xả — bơm/xả chỉ qua lệnh pump thủ công
+    transitionTo(STATE_IDLE);
     if (commandQueue.empty()) {
-        if (!isWaterEmpty()) {
-            emitEvent("draining", "Queue rỗng. Bắt đầu xả nước...");
-            transitionTo(STATE_DRAINING);
-        } else {
-            transitionTo(STATE_IDLE);
-            emitEvent("idle", "Queue rỗng, nước đã cạn. Sẵn sàng.");
-        }
+        emitEvent("idle", "Đã đo xong. Queue rỗng. Sẵn sàng.");
     } else {
-        transitionTo(STATE_IDLE);
-        emitEvent("idle", "Còn lệnh trong queue. Giữ nước, chạy lệnh tiếp...");
+        emitEvent("idle", "Đã đo xong. Còn lệnh trong queue, chạy tiếp...");
     }
+}
+
+void SamplingManager::clearCommandQueue() {
+    while (!commandQueue.empty()) commandQueue.pop();
 }
 
 void SamplingManager::handleStateIdle() {
@@ -462,7 +545,8 @@ void SamplingManager::handleStateFilling(unsigned long elapsed) {
             floatFullSince = millis();
         }
         if (millis() - floatFullSince >= FLOAT_DEBOUNCE_TIME) {
-            Serial.println("[Sampling] [Phao] NƯỚC ĐẦY. Tắt bơm.");
+            fillFailCount = 0;
+            LOGLN("[Sampling] [Phao] NƯỚC ĐẦY. Tắt bơm.");
             emitEvent("filled", "Phao báo NƯỚC ĐẦY. Đang chờ nước ổn định...");
             transitionTo(STATE_STABILIZING);
             return;
@@ -472,9 +556,34 @@ void SamplingManager::handleStateFilling(unsigned long elapsed) {
     }
 
     if (elapsed >= MAX_FILL_TIME) {
-        Serial.println("[Sampling] LỖI: Bơm quá 60s chưa đầy.");
-        emitEvent("fill_timeout", "Quá thời gian nạp nước. Hủy lệnh đo hiện tại.");
+        fillFailCount++;
+        LOGLN("[Sampling] LỖI: Bơm quá 30s chưa đầy.");
         powerOffAllSensors();
+
+        if (fillFailCount >= MAX_FILL_FAILS) {
+            size_t dropped = commandQueue.size();
+            clearCommandQueue();
+            fillFailCount = 0;
+            LOGF(
+                "[Sampling] ABORT: timeout bơm %u lần liên tiếp → hủy %u lệnh còn lại.\n",
+                (unsigned)MAX_FILL_FAILS,
+                (unsigned)dropped
+            );
+            emitEvent(
+                "fill_abort",
+                "Bơm/phao lỗi: timeout " + String(MAX_FILL_FAILS) +
+                    " lần liên tiếp. Đã hủy " + String((unsigned)dropped) +
+                    " lệnh còn lại trong queue."
+            );
+            transitionTo(STATE_IDLE);
+            return;
+        }
+
+        emitEvent(
+            "fill_timeout",
+            "Quá thời gian nạp nước (" + String(fillFailCount) + "/" +
+                String(MAX_FILL_FAILS) + "). Hủy lệnh đo hiện tại."
+        );
         transitionTo(STATE_IDLE);
     }
 }
@@ -484,7 +593,7 @@ void SamplingManager::handleStateStabilizing(unsigned long elapsed) {
         transitionTo(STATE_MEASURING);
         measureSensor(currentSensor);
         powerOffAllSensors();
-        Serial.printf("[Sampling] Đã đo xong [%s], đã gửi MQTT.\n", getSensorName(currentSensor).c_str());
+        LOGF("[Sampling] Đã đo xong [%s], đã gửi MQTT.\n", getSensorName(currentSensor).c_str());
         emitEvent("measuring_complete", "Đã gửi kết quả. Tiếp tục chu trình...");
         transitionTo(STATE_PUBLISHING);
     }
@@ -500,7 +609,7 @@ void SamplingManager::handleStateDraining(unsigned long elapsed) {
             floatEmptySince = millis();
         }
         if (millis() - floatEmptySince >= FLOAT_DEBOUNCE_TIME) {
-            Serial.println("[Sampling] [Phao] NƯỚC CẠN. Tắt van.");
+            LOGLN("[Sampling] [Phao] NƯỚC CẠN. Tắt van.");
             emitEvent("drained", "Phao báo nước cạn. Đã tắt van xả.");
             transitionTo(STATE_IDLE);
             emitEvent("idle", "Chu trình hoàn tất. Hệ thống sẵn sàng.");
@@ -511,7 +620,7 @@ void SamplingManager::handleStateDraining(unsigned long elapsed) {
     }
 
     if (elapsed >= MAX_DRAIN_TIME) {
-        Serial.println("[Sampling] LỖI: Xả quá 60s chưa cạn.");
+        LOGLN("[Sampling] LỖI: Xả quá 30s chưa cạn.");
         emitEvent("drain_timeout", "Quá thời gian xả nước. Đã tắt van.");
         transitionTo(STATE_IDLE);
         emitEvent("idle", "Hết timeout xả. Hệ thống sẵn sàng.");
@@ -523,6 +632,8 @@ void SamplingManager::handleStatePublishing() {
 }
 
 void SamplingManager::handle() {
+    handleManualPumpTimeouts();
+
     unsigned long elapsed = millis() - stateTimer;
 
     switch (currentState) {
@@ -575,7 +686,7 @@ RawReading SamplingManager::readRawADC(uint8_t pin, int sampleCount) {
     reading.adc = medianFilter(samples, sampleCount);
     reading.voltage = (reading.adc * ADC_VREF) / (float)TDS_ADC_MAX;
 
-    Serial.printf("[RAW] GPIO%u | ADC=%d | V=%.3fV | samples=%d\n",
+    LOGF("[RAW] GPIO%u | ADC=%d | V=%.3fV | samples=%d\n",
         pin, reading.adc, reading.voltage, sampleCount);
 
     return reading;

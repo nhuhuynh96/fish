@@ -100,6 +100,44 @@ func (s *Scheduler) ToggleAuto(deviceID string, enabled bool) {
 	log.Printf("[Backend Scheduler] Đã đổi trạng thái Auto cho [%s] -> %v", deviceID, enabled)
 }
 
+// EnsureDevice đăng ký lịch mặc định (Auto TẮT) nếu device chưa có trong scheduler.
+func (s *Scheduler) EnsureDevice(deviceID string) {
+	if deviceID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.schedules[deviceID]; ok {
+		return
+	}
+	now := time.Now()
+	s.schedules[deviceID] = &DeviceSchedule{
+		AutoEnabled:  false,
+		TempInterval: 60 * time.Second,
+		PhInterval:   120 * time.Second,
+		TurbInterval: 180 * time.Second,
+		TdsInterval:  300 * time.Second,
+		lastTempRun:  now,
+		lastPhRun:    now,
+		lastTurbRun:  now,
+		lastTdsRun:   now,
+	}
+	log.Printf("[Backend Scheduler] Device mới [%s] → đăng ký lịch mặc định (Auto=OFF)", deviceID)
+}
+
+// Lấy cấu hình lịch hiện tại (nil nếu chưa có)
+func (s *Scheduler) GetDeviceSchedule(deviceID string) *DeviceSchedule {
+	s.EnsureDevice(deviceID)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sched, ok := s.schedules[deviceID]
+	if !ok || sched == nil {
+		return nil
+	}
+	cp := *sched
+	return &cp
+}
+
 // Khởi động vòng lặp kiểm tra lịch đo định kỳ
 func (s *Scheduler) Start() {
 	ticker := time.NewTicker(1 * time.Second)

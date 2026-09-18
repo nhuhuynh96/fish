@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api, createWebSocket } from './services/api';
 import Header from './components/Header';
+import NavMenu from './components/NavMenu';
 import SensorCards from './components/SensorCards';
 import LiveSamplingTimeline from './components/LiveSamplingTimeline';
 import SchedulePanel from './components/SchedulePanel';
@@ -8,6 +9,7 @@ import ControlPanel from './components/ControlPanel';
 import EventLogStream from './components/EventLogStream';
 import HistoryTable from './components/HistoryTable';
 import CalibrationPanel from './components/CalibrationPanel';
+import DeviceLogStream from './components/DeviceLogStream';
 
 function mergeMeasurement(prev, incoming) {
   if (!prev) return incoming;
@@ -26,12 +28,14 @@ function mergeMeasurement(prev, incoming) {
 }
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [devices, setDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState('esp32_6ecb08');
   const [wsConnected, setWsConnected] = useState(false);
   const [latestMeasurement, setLatestMeasurement] = useState(null);
   const [history, setHistory] = useState([]);
   const [events, setEvents] = useState([]);
+  const [deviceLogs, setDeviceLogs] = useState([]);
   const [currentState, setCurrentState] = useState('IDLE');
   const [deviceStatus, setDeviceStatus] = useState({ online: true });
 
@@ -64,9 +68,9 @@ export default function App() {
 
   useEffect(() => {
     loadData(selectedDevice);
+    setDeviceLogs([]);
   }, [selectedDevice, loadData]);
 
-  // Thiết lập kết nối WebSocket Realtime
   useEffect(() => {
     const cleanup = createWebSocket(
       (msg) => {
@@ -97,6 +101,10 @@ export default function App() {
               setCurrentState(payload.state);
             }
           }
+        } else if (type === 'device_log') {
+          if (payload.device_id === selectedDevice) {
+            setDeviceLogs((prev) => [...prev.slice(-199), payload]);
+          }
         }
       },
       (connected) => setWsConnected(connected)
@@ -119,6 +127,15 @@ export default function App() {
       await api.setPump(selectedDevice, target, state);
     } catch (e) {
       console.error('Pump error:', e);
+    }
+  };
+
+  const handleClearQueue = async () => {
+    try {
+      await api.clearQueue(selectedDevice);
+    } catch (e) {
+      console.error('Clear queue error:', e);
+      alert('Không thể gửi lệnh xóa queue: ' + e.message);
     }
   };
 
@@ -151,36 +168,55 @@ export default function App() {
         currentState={currentState}
       />
 
-      <SensorCards measurement={latestMeasurement} />
+      <NavMenu activeTab={activeTab} onChange={setActiveTab} />
 
-      <LiveSamplingTimeline
-        currentState={currentState}
-        latestEvent={events.length > 0 ? events[0] : null}
-      />
+      {activeTab === 'dashboard' && (
+        <section className="page-section">
+          <SensorCards measurement={latestMeasurement} />
 
-      {/* Main Grid: Control Panel, Auto-Schedule, Event Stream */}
-      <div className="main-sections-grid" style={{ marginBottom: '24px' }}>
-        <ControlPanel
-          onMeasure={handleMeasure}
-          onPump={handlePump}
-          isMeasuring={currentState !== 'IDLE'}
-        />
-        <EventLogStream events={events} />
-      </div>
+          <LiveSamplingTimeline
+            currentState={currentState}
+            latestEvent={events.length > 0 ? events[0] : null}
+          />
 
-      <div style={{ marginBottom: '28px' }}>
-        <SchedulePanel
-          deviceId={selectedDevice}
-          onSetSchedule={handleSetSchedule}
-          onToggleAuto={handleToggleAuto}
-        />
-      </div>
+          <div className="main-sections-grid" style={{ marginBottom: '24px' }}>
+            <ControlPanel
+              onMeasure={handleMeasure}
+              onPump={handlePump}
+              onClearQueue={handleClearQueue}
+              isMeasuring={currentState !== 'IDLE'}
+            />
+            <EventLogStream events={events} />
+          </div>
 
-      <div style={{ marginBottom: '28px' }}>
-        <CalibrationPanel deviceId={selectedDevice} latestMeasurement={latestMeasurement} />
-      </div>
+          <DeviceLogStream logs={deviceLogs} />
+        </section>
+      )}
 
-      <HistoryTable history={history} />
+      {activeTab === 'schedule' && (
+        <section className="page-section">
+          <SchedulePanel
+            deviceId={selectedDevice}
+            onSetSchedule={handleSetSchedule}
+            onToggleAuto={handleToggleAuto}
+          />
+        </section>
+      )}
+
+      {activeTab === 'calibration' && (
+        <section className="page-section">
+          <CalibrationPanel
+            deviceId={selectedDevice}
+            latestMeasurement={latestMeasurement}
+          />
+        </section>
+      )}
+
+      {activeTab === 'history' && (
+        <section className="page-section">
+          <HistoryTable history={history} />
+        </section>
+      )}
     </div>
   );
 }

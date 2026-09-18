@@ -12,18 +12,32 @@ func CalcPH(voltage, neutralV, slope float64) float64 {
 }
 
 // CalcTDS converts probe voltage to ppm using DFRobot-style polynomial with temp compensation.
-func CalcTDS(voltage, tempC float64) float64 {
+// Optional single-point scale: when refV > 0 and refPPM > 0, result is scaled so that
+// voltage=refV maps to refPPM (after temperature compensation).
+func CalcTDS(voltage, tempC, refV, refPPM, maxPPM float64) float64 {
+	if maxPPM <= 0 {
+		maxPPM = 2000
+	}
+	raw := tdsFromVoltage(voltage, tempC)
+	if refV > 0 && refPPM > 0 {
+		refRaw := tdsFromVoltage(refV, tempC)
+		if refRaw > 1 {
+			raw = raw * (refPPM / refRaw)
+		}
+	}
+	return clamp(raw, 0, maxPPM)
+}
+
+func tdsFromVoltage(voltage, tempC float64) float64 {
 	compensationCoefficient := 1.0 + 0.02*(tempC-25.0)
 	if compensationCoefficient < 0.1 {
 		compensationCoefficient = 0.1
 	}
 	compensationVoltage := voltage / compensationCoefficient
 
-	tdsValue := (133.42*compensationVoltage*compensationVoltage*compensationVoltage -
+	return (133.42*compensationVoltage*compensationVoltage*compensationVoltage -
 		255.86*compensationVoltage*compensationVoltage +
 		857.39*compensationVoltage) * 0.5
-
-	return clamp(tdsValue, 0, 1000)
 }
 
 // CalcTurbidity maps voltage to NTU using piecewise linear calibration.

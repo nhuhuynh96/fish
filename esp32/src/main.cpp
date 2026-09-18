@@ -6,6 +6,7 @@
 #include "portal/WebPortal.h"
 #include "mqtt/MQTTHandler.h"
 #include "sampling/SamplingManager.h"
+#include "log/RemoteLog.h"
 
 // Chân nút nhấn BOOT trên ESP32 để kích hoạt lại chế độ cấu hình
 const int BUTTON_PIN = 0; // GPIO 0 (Nút BOOT có sẵn trên board ESP32)
@@ -16,7 +17,7 @@ bool buttonIsPressed = false;
 unsigned long lastHeartbeat = 0;
 
 static void publishCommandError(const String &message) {
-    Serial.println("[Command] " + message);
+    LOGLN("[Command] " + message);
     if (mqttHandler.isConnected()) {
         String payload = "{\"device_id\":\"" + currentConfig.device_id + "\",";
         payload += "\"stage\":\"command_error\",";
@@ -45,7 +46,7 @@ static bool parsePumpState(JsonVariantConst stateVar, bool &outState) {
             outState = true;
             return true;
         }
-        if (s == "off" || s == "0" || s == "false" || s == "tat") {
+        if (s == "off" || s == "0" || s == "false" || s == "tat" || s == "of") {
             outState = false;
             return true;
         }
@@ -54,15 +55,14 @@ static bool parsePumpState(JsonVariantConst stateVar, bool &outState) {
     return false;
 }
 
-// Parse lệnh MQTT JSON chuẩn từ backend
-// {"action":"measure","sensors":["temp","tds"]}
-// {"action":"pump","target":"inlet","state":"ON"}
+// {"action":"pump","target":"inlet"|"drain","state":"ON"|"OFF"}
 // {"action":"status"}
+// {"action":"clear_queue"}
 void handleMqttCommand(const String &msg) {
     String payload = msg;
     payload.trim();
 
-    Serial.printf("[Command] Nhận payload: %s\n", payload.c_str());
+    LOGF("[Command] Nhận payload: %s\n", payload.c_str());
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload);
@@ -98,10 +98,14 @@ void handleMqttCommand(const String &msg) {
         return;
     }
 
-    if (action == "pump" || action == "bom") {
-        String target = doc["target"] | "inlet";
+    if (action == "pump") {
+        String target = doc["target"] | "";
+        target.toLowerCase();
         target.trim();
-        if (target.isEmpty()) target = "inlet";
+        if (target != "inlet" && target != "drain") {
+            publishCommandError("pump target phải là \"inlet\" hoặc \"drain\".");
+            return;
+        }
 
         bool state = false;
         if (!parsePumpState(doc["state"], state)) {
@@ -118,22 +122,27 @@ void handleMqttCommand(const String &msg) {
         return;
     }
 
-    // schedule / auto_toggle từ backend: nhận nhưng chưa điều khiển phần cứng
-    if (action == "schedule" || action == "auto_toggle") {
-        Serial.printf("[Command] Nhận action '%s' (chưa triển khai phần cứng).\n", action.c_str());
+    if (action == "clear_queue" || action == "clear" || action == "abort") {
+        samplingManager.clearQueue();
         return;
     }
 
-    publishCommandError("action không hỗ trợ. Dùng measure | pump | status.");
+    // schedule / auto_toggle từ backend: nhận nhưng chưa điều khiển phần cứng
+    if (action == "schedule" || action == "auto_toggle") {
+        LOGF("[Command] Nhận action '%s' (chưa triển khai phần cứng).\n", action.c_str());
+        return;
+    }
+
+    publishCommandError("action không hỗ trợ. Dùng measure | pump | status | clear_queue.");
 }
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    Serial.println("\n==========================================");
-    Serial.println("         ESP32 IOT FISH CONTROLLER        ");
-    Serial.println("==========================================");
+    LOGLN("\n==========================================");
+    LOGLN("         ESP32 IOT FISH CONTROLLER        ");
+    LOGLN("==========================================");
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
@@ -146,16 +155,16 @@ void setup() {
     // Kiểm tra nếu chưa cấu hình hoặc người dùng đang giữ nút BOOT khi cắm nguồn
     if (!hasConfig || digitalRead(BUTTON_PIN) == LOW) {
         if (!hasConfig) {
-            Serial.println("[Main] Chưa có cấu hình WiFi/MQTT. Bắt đầu phát AP...");
+            LOGLN("[Main] Chưa có cấu hình WiFi/MQTT. Bắt đầu phát AP...");
         } else {
-            Serial.println("[Main] Phát hiện giữ nút BOOT. Bắt đầu phát AP cấu hình...");
+            LOGLN("[Main] Phát hiện giữ nút BOOT. Bắt đầu phát AP cấu hình...");
         }
         webPortal.startPortal();
         return;
     }
 
     // Tiến hành kết nối WiFi đã cấu hình
-    Serial.printf("[Main] Đang kết nối WiFi: %s\n", currentConfig.wifi_ssid.c_str());
+    LOGF("[Main] Đang kết nối WiFi: %s\n", currentConfig.wifi_ssid.c_str());
     WiFi.mode(WIFI_STA);
     WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
 
@@ -169,22 +178,22 @@ void setup() {
     Serial.println();
 
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("[Main] WiFi đã kết nối thành công!");
-        Serial.printf("[Main] IP Address: %s\n", WiFi.localIP().toString().c_str());
+        LOGLN("[Main] WiFi đã kết nối thành công!");
+        LOGF("[Main] IP Address: %s\n", WiFi.localIP().toString().c_str());
 
         // Khởi động MQTT Handler
         mqttHandler.begin(currentConfig);
         mqttHandler.setCallback([](char* topic, byte* payload, unsigned int length) {
             String msg;
             for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-            Serial.printf("[App] Lệnh nhận từ MQTT: %s\n", msg.c_str());
+            LOGF("[App] Lệnh nhận từ MQTT: %s\n", msg.c_str());
 
             // Chuyển cho bộ điều phối lệnh
             handleMqttCommand(msg);
         });
     } else {
-        Serial.println("[Main] Kết nối WiFi thất bại (Sai pass hoặc mất sóng)!");
-        Serial.println("[Main] Tự động chuyển sang chế độ AP cấu hình...");
+        LOGLN("[Main] Kết nối WiFi thất bại (Sai pass hoặc mất sóng)!");
+        LOGLN("[Main] Tự động chuyển sang chế độ AP cấu hình...");
         webPortal.startPortal();
     }
 }
@@ -195,10 +204,10 @@ void checkButtonHold() {
         if (!buttonIsPressed) {
             buttonIsPressed = true;
             buttonPressStartTime = millis();
-            Serial.println("[Button] Đang nhấn nút BOOT...");
+            LOGLN("[Button] Đang nhấn nút BOOT...");
         } else {
             if (millis() - buttonPressStartTime >= BUTTON_HOLD_TIME) {
-                Serial.println("\n[Button] Đã giữ nút 3 giây -> Chuyển sang chế độ Cấu hình AP!");
+                LOGLN("\n[Button] Đã giữ nút 3 giây -> Chuyển sang chế độ Cấu hình AP!");
                 buttonIsPressed = false;
                 
                 // Bật chế độ cấu hình AP
@@ -208,7 +217,7 @@ void checkButtonHold() {
     } else {
         if (buttonIsPressed) {
             buttonIsPressed = false;
-            Serial.println("[Button] Đã thả nút BOOT.");
+            LOGLN("[Button] Đã thả nút BOOT.");
         }
     }
 }
@@ -226,6 +235,9 @@ void loop() {
     // Xử lý kết nối và nhận lệnh MQTT
     mqttHandler.handle();
 
+    // Đẩy Serial log đã xếp hàng lên MQTT topic fish/<id>/log
+    remoteLog.handle();
+
     // Xử lý máy trạng thái lấy mẫu & đo chỉ số (Bơm -> Đo tuần tự -> Xả)
     samplingManager.handle();
 
@@ -235,7 +247,7 @@ void loop() {
         if (mqttHandler.isConnected()) {
             String telemetry = "{\"rssi\":" + String(WiFi.RSSI()) + ",\"uptime\":" + String(millis() / 1000) + ",\"state\":\"" + samplingManager.getStateName() + "\",\"queue_size\":" + String((unsigned)samplingManager.queueSize()) + "}";
             mqttHandler.publish("telemetry", telemetry);
-            Serial.println("[Main] Đã gửi telemetry lên MQTT.");
+            LOGLN("[Main] Đã gửi telemetry lên MQTT.");
         }
     }
 }

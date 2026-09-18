@@ -63,6 +63,7 @@ public:
     void enqueueMeasure(const std::vector<String> &sensors);
     void enqueuePump(const String &target, bool state);
     void enqueueStatus();
+    void clearQueue();
 
     void setManualPump(const String &target, bool state);
     void publishStatus();
@@ -85,11 +86,19 @@ private:
     unsigned long stateTimer = 0;
     unsigned long floatFullSince = 0;
     unsigned long floatEmptySince = 0;
+    uint8_t fillFailCount = 0;
 
-    const unsigned long STABILIZE_TIME = 1000;
-    const unsigned long MAX_FILL_TIME = 60000;
+    bool manualInletActive = false;
+    bool manualDrainActive = false;
+    unsigned long manualInletSince = 0;
+    unsigned long manualDrainSince = 0;
+
+    const unsigned long STABILIZE_TIME = 500;
+    const unsigned long MAX_FILL_TIME = 60000;   // giữ cho tương thích (measure không còn dùng)
     const unsigned long MAX_DRAIN_TIME = 60000;
     const unsigned long FLOAT_DEBOUNCE_TIME = 300;
+    const unsigned long MAX_MANUAL_PUMP_TIME = 60000; // bơm/van thủ công: phao hoặc 60s
+    static const uint8_t MAX_FILL_FAILS = 3;
 
     const uint8_t INLET_PUMP_PIN = 18;
     const uint8_t DRAIN_VALVE_PIN = 19;
@@ -124,6 +133,7 @@ private:
     void finishCycle();
     void processCommandQueue();
     void startMeasureCycle(SensorType sensor);
+    void clearCommandQueue();
 
     void handleStateIdle();
     void handleStateFilling(unsigned long elapsed);
@@ -131,6 +141,7 @@ private:
     void handleStateMeasuring(unsigned long elapsed);
     void handleStateDraining(unsigned long elapsed);
     void handleStatePublishing();
+    void handleManualPumpTimeouts();
 
     bool isWaterFull() const;
     bool isWaterEmpty() const;

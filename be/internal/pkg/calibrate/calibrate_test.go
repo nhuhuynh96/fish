@@ -26,9 +26,17 @@ func TestCalcPH_Clamp(t *testing.T) {
 }
 
 func TestCalcTDS_LowVoltage(t *testing.T) {
-	tds := CalcTDS(0.144, 25.0)
+	tds := CalcTDS(0.144, 25.0, 0, 0, 2000)
 	if tds < 50 || tds > 70 {
 		t.Fatalf("expected TDS ~59 ppm, got %.0f", tds)
+	}
+}
+
+func TestCalcTDS_SinglePointScale(t *testing.T) {
+	// Serial: 1.005V in 1382 ppm standard → should map to ~1382
+	tds := CalcTDS(1.005, 25.0, 1.005, 1382, 2000)
+	if tds < 1370 || tds > 1390 {
+		t.Fatalf("expected ~1382 ppm after scale, got %.0f", tds)
 	}
 }
 

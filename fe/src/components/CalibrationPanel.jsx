@@ -5,6 +5,9 @@ const DEFAULTS = {
   ph_neutral_v: 2.5,
   ph_slope: 0.18,
   tds_temp_c: 25,
+  tds_ref_v: 0,
+  tds_ref_ppm: 0,
+  tds_max_ppm: 2000,
   turb_v_clear: 2.15,
   turb_v_dirty: 1.0,
   turb_ntu_max: 1000,
@@ -27,6 +30,9 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
             ph_neutral_v: cal.ph_neutral_v ?? DEFAULTS.ph_neutral_v,
             ph_slope: cal.ph_slope ?? DEFAULTS.ph_slope,
             tds_temp_c: cal.tds_temp_c ?? DEFAULTS.tds_temp_c,
+            tds_ref_v: cal.tds_ref_v ?? DEFAULTS.tds_ref_v,
+            tds_ref_ppm: cal.tds_ref_ppm ?? DEFAULTS.tds_ref_ppm,
+            tds_max_ppm: cal.tds_max_ppm ?? DEFAULTS.tds_max_ppm,
             turb_v_clear: cal.turb_v_clear ?? DEFAULTS.turb_v_clear,
             turb_v_dirty: cal.turb_v_dirty ?? DEFAULTS.turb_v_dirty,
             turb_ntu_max: cal.turb_ntu_max ?? DEFAULTS.turb_ntu_max,
@@ -66,6 +72,19 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
     }
   };
 
+  const applyTdsVoltage = () => {
+    if (latestMeasurement?.tds_voltage != null) {
+      setForm((prev) => ({
+        ...prev,
+        tds_ref_v: latestMeasurement.tds_voltage,
+        tds_ref_ppm: prev.tds_ref_ppm > 0 ? prev.tds_ref_ppm : 1382,
+      }));
+      setMessage(
+        `Đã gán tds_ref_v = ${latestMeasurement.tds_voltage.toFixed(3)}V. Điền ppm trên chai rồi Lưu.`
+      );
+    }
+  };
+
   return (
     <div className="glass-card">
       <div className="panel-header" style={{ marginBottom: '16px' }}>
@@ -93,10 +112,25 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
           </fieldset>
 
           <fieldset className="cal-fieldset">
-            <legend>TDS</legend>
+            <legend>TDS (1 điểm chuẩn)</legend>
             <label>Nhiệt độ bù (°C)
               <input type="number" step="0.1" value={form.tds_temp_c} onChange={handleChange('tds_temp_c')} />
             </label>
+            <label>V trong chuẩn (tds_ref_v)
+              <input type="number" step="0.001" value={form.tds_ref_v} onChange={handleChange('tds_ref_v')} />
+            </label>
+            <label>PPM trên chai chuẩn
+              <input type="number" step="1" value={form.tds_ref_ppm} onChange={handleChange('tds_ref_ppm')} />
+            </label>
+            <label>PPM max
+              <input type="number" step="1" value={form.tds_max_ppm} onChange={handleChange('tds_max_ppm')} />
+            </label>
+            <button type="button" className="btn-secondary" onClick={applyTdsVoltage}>
+              Lấy V từ lần đo TDS gần nhất
+            </button>
+            <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: '8px' }}>
+              Đặt ref_ppm = 0 để tắt scale (chỉ dùng công thức DFRobot).
+            </p>
           </fieldset>
 
           <fieldset className="cal-fieldset">

@@ -64,6 +64,7 @@ type DeviceRepository interface {
 type CommandPublisher interface {
 	PublishMeasure(ctx context.Context, deviceID string, sensors []string) error
 	PublishPump(ctx context.Context, deviceID string, target string, state bool) error
+	PublishClearQueue(ctx context.Context, deviceID string) error
 	PublishSchedule(ctx context.Context, deviceID string, enabled bool, temp, ph, turb, tds int) error
 	PublishAutoToggle(ctx context.Context, deviceID string, enabled bool) error
 }

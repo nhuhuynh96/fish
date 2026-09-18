@@ -17,7 +17,7 @@ var upgrader = websocket.Upgrader{
 }
 
 type WSMessage struct {
-	Type      string    `json:"type"` // "sensor_data", "sampling_event", "device_status"
+	Type      string    `json:"type"` // "sensor_data", "sampling_event", "device_status", "device_log"
 	Payload   any       `json:"payload"`
 	Timestamp time.Time `json:"timestamp"`
 }

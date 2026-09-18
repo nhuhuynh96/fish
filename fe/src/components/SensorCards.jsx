@@ -34,11 +34,20 @@ export default function SensorCards({ measurement }) {
     return { text: 'Chất rắn cao (>260 ppm)', cls: 'badge-danger' };
   };
 
+  const formatRaw = (adc, voltage) => {
+    if (adc == null && voltage == null) return null;
+    const parts = [];
+    if (adc != null) parts.push(`ADC ${adc}`);
+    if (voltage != null) parts.push(`${Number(voltage).toFixed(3)} V`);
+    return parts.join(' · ');
+  };
+
   const cards = [
     {
       title: 'Nhiệt Độ Nước',
       value: temp !== undefined && temp !== null ? temp.toFixed(1) : '--',
       unit: '°C',
+      raw: null,
       status: getTempStatus(temp),
       iconBg: 'rgba(239, 68, 68, 0.15)',
       iconColor: '#f87171',
@@ -53,6 +62,7 @@ export default function SensorCards({ measurement }) {
       title: 'Độ pH Môi Trường',
       value: ph !== undefined && ph !== null ? ph.toFixed(2) : '--',
       unit: 'pH',
+      raw: formatRaw(measurement?.ph_adc, measurement?.ph_voltage),
       status: getPhStatus(ph),
       iconBg: 'rgba(16, 185, 129, 0.15)',
       iconColor: '#34d399',
@@ -67,6 +77,7 @@ export default function SensorCards({ measurement }) {
       title: 'Độ Đục Của Nước',
       value: turb !== undefined && turb !== null ? turb.toFixed(1) : '--',
       unit: 'NTU',
+      raw: formatRaw(measurement?.turbidity_adc, measurement?.turbidity_voltage),
       status: getTurbStatus(turb),
       iconBg: 'rgba(56, 189, 248, 0.15)',
       iconColor: '#38bdf8',
@@ -81,6 +92,7 @@ export default function SensorCards({ measurement }) {
       title: 'Chất Rắn Hòa Tan (TDS)',
       value: tds !== undefined && tds !== null ? Math.round(tds) : '--',
       unit: 'ppm',
+      raw: formatRaw(measurement?.tds_adc, measurement?.tds_voltage),
       status: getTdsStatus(tds),
       iconBg: 'rgba(129, 140, 248, 0.15)',
       iconColor: '#818cf8',
@@ -107,6 +119,11 @@ export default function SensorCards({ measurement }) {
             <div className="sensor-value">{c.value}</div>
             <div className="sensor-unit">{c.unit}</div>
           </div>
+          {c.raw && (
+            <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '4px' }}>
+              raw: {c.raw}
+            </div>
+          )}
           <div className={`sensor-badge ${c.status.cls}`}>{c.status.text}</div>
         </div>
       ))}

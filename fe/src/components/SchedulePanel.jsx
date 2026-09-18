@@ -1,13 +1,38 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { api } from '../services/api';
 
 export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto }) {
-  const [autoEnabled, setAutoEnabled] = useState(true);
+  const [autoEnabled, setAutoEnabled] = useState(false);
   const [tempInterval, setTempInterval] = useState(60);
   const [phInterval, setPhInterval] = useState(120);
   const [turbInterval, setTurbInterval] = useState(180);
   const [tdsInterval, setTdsInterval] = useState(300);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      if (!deviceId) return;
+      setLoading(true);
+      try {
+        const sched = await api.getSchedule(deviceId);
+        if (!active || !sched) return;
+        setAutoEnabled(!!sched.auto_enabled);
+        if (sched.temp_interval > 0) setTempInterval(sched.temp_interval);
+        if (sched.ph_interval > 0) setPhInterval(sched.ph_interval);
+        if (sched.turb_interval > 0) setTurbInterval(sched.turb_interval);
+        if (sched.tds_interval > 0) setTdsInterval(sched.tds_interval);
+      } catch (e) {
+        console.error('Load schedule error:', e);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    load();
+    return () => { active = false; };
+  }, [deviceId]);
 
   const applyPreset = (temp, ph, turb, tds) => {
     setTempInterval(temp);
@@ -39,9 +64,14 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
 
   const handleToggle = async () => {
     const next = !autoEnabled;
+    const prev = autoEnabled;
     setAutoEnabled(next);
-    if (deviceId) {
+    if (!deviceId) return;
+    try {
       await onToggleAuto(next);
+    } catch (err) {
+      console.error(err);
+      setAutoEnabled(prev);
     }
   };
 
@@ -58,19 +88,21 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
         <button
           type="button"
           onClick={handleToggle}
+          disabled={loading}
           style={{
             background: autoEnabled ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
             border: `1px solid ${autoEnabled ? '#10b981' : '#ef4444'}`,
             color: autoEnabled ? '#10b981' : '#ef4444',
             padding: '4px 12px',
             borderRadius: '20px',
-            cursor: 'pointer',
+            cursor: loading ? 'wait' : 'pointer',
             fontSize: '12px',
             fontWeight: 700,
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
             transition: 'all 0.2s ease',
+            opacity: loading ? 0.6 : 1,
           }}
         >
           <span
@@ -82,11 +114,14 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
               boxShadow: autoEnabled ? '0 0 8px #10b981' : 'none',
             }}
           />
-          {autoEnabled ? 'AUTO: ĐANG BẬT' : 'AUTO: ĐANG TẮT'}
+          {loading ? 'AUTO: ...' : autoEnabled ? 'AUTO: ĐANG BẬT' : 'AUTO: ĐANG TẮT'}
         </button>
       </div>
 
-      {/* Preset Buttons */}
+      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+        Auto chạy trên <b>backend scheduler</b> (mỗi giây kiểm tra lịch → gửi MQTT measure). ESP32 không tự đếm giờ.
+      </p>
+
       <div style={{ marginBottom: '16px' }}>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>Cấu hình mẫu:</div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -230,7 +265,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             style={{ flex: 1, justifyContent: 'center' }}
             disabled={saving}
           >
-            {saving ? '⏳ Đang lưu cấu hình...' : '💾 Cập Nhật Lịch Đo Lên ESP32'}
+            {saving ? '⏳ Đang lưu cấu hình...' : '💾 Cập Nhật Lịch Đo'}
           </button>
           {saveSuccess && (
             <span style={{ color: '#10b981', fontSize: '12px', fontWeight: 600 }}>
@@ -239,34 +274,6 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
           )}
         </div>
       </form>
-
-      {/* Smart Queue Info Box */}
-      <div
-        style={{
-          marginTop: '16px',
-          padding: '12px',
-          borderRadius: '10px',
-          background: 'rgba(14, 165, 233, 0.08)',
-          border: '1px solid rgba(14, 165, 233, 0.2)',
-          fontSize: '12px',
-          lineHeight: '1.6',
-        }}
-      >
-        <div style={{ fontWeight: 600, color: 'var(--primary)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span>🔄</span> Cơ Chế Hàng Đợi Thông Minh (Smart Sampling Queue):
-        </div>
-        <ul style={{ margin: 0, paddingLeft: '18px', color: 'var(--text-muted)' }}>
-          <li>
-            <b>Nếu có nước hoặc đang bơm:</b> Hệ thống tự động gộp chỉ số đến hạn vào lượt đo hiện tại mà không bơm lại nước.
-          </li>
-          <li>
-            <b>Nếu đang xả nước:</b> Chỉ số đến hạn được xếp hàng và tự động kích hoạt chu trình mới ngay sau khi xả xong.
-          </li>
-          <li>
-            <b>Nếu buồng rảnh:</b> Khởi động bơm nước $\rightarrow$ đo tuần tự từng cảm biến $\rightarrow$ xả nước $\rightarrow$ publish dữ liệu.
-          </li>
-        </ul>
-      </div>
     </div>
   );
 }

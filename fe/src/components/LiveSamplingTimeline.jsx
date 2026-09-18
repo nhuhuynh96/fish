@@ -2,17 +2,19 @@ import React from 'react';
 
 export default function LiveSamplingTimeline({ currentState, latestEvent }) {
   const steps = [
-    { key: 'FILLING_WATER', label: '1. Bơm Nạp Nước', desc: 'Bơm vào đến khi Phao ĐẦY' },
-    { key: 'STABILIZING', label: '2. Lắng Nước', desc: 'Chờ nước ổn định 1s' },
-    { key: 'MEASURING', label: '3. Đo Tuần Tự', desc: 'Cấp nguồn từng cảm biến (tránh nhiễu)' },
-    { key: 'DRAINING_WATER', label: '4. Xả Nước', desc: 'Xả sạch buồng đo đến khi Phao CẠN' },
-    { key: 'PUBLISHING', label: '5. Hoàn Tất', desc: 'Gửi kết quả đo về Server' },
+    { key: 'STABILIZING', label: '1. Chuẩn Bị', desc: 'Sẵn sàng đọc cảm biến' },
+    { key: 'MEASURING', label: '2. Đo Cảm Biến', desc: 'Đọc ADC / voltage từng sensor' },
+    { key: 'PUBLISHING', label: '3. Gửi MQTT', desc: 'Publish sensor_data lên backend' },
   ];
 
   const getStepStatus = (stepKey, index) => {
     if (!currentState || currentState === 'IDLE') return '';
-    const stateOrder = ['FILLING_WATER', 'STABILIZING', 'MEASURING', 'DRAINING_WATER', 'PUBLISHING'];
-    const currentIndex = stateOrder.indexOf(currentState);
+    // FILLING/DRAINING cũ không còn trong chu trình measure
+    const stateOrder = ['STABILIZING', 'MEASURING', 'PUBLISHING'];
+    let mapped = currentState;
+    if (currentState === 'FILLING_WATER') mapped = 'STABILIZING';
+    if (currentState === 'DRAINING_WATER') mapped = 'PUBLISHING';
+    const currentIndex = stateOrder.indexOf(mapped);
 
     if (currentIndex === -1) return '';
     if (currentIndex === index) return 'active';
@@ -26,8 +28,11 @@ export default function LiveSamplingTimeline({ currentState, latestEvent }) {
         <svg width="18" height="18" fill="var(--primary)" viewBox="0 0 24 24">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
         </svg>
-        Tiến Trình Chu Trình Lấy Mẫu (Sampling State Machine)
+        Tiến Trình Đo Cảm Biến
       </div>
+      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+        Measure không bơm/xả. Bơm nạp / van xả điều khiển bằng lệnh pump riêng.
+      </p>
 
       <div className="timeline-stepper">
         {steps.map((s, idx) => {

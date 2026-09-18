@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export default function ControlPanel({ onMeasure, onPump, isMeasuring }) {
+export default function ControlPanel({ onMeasure, onPump, onClearQueue, isMeasuring }) {
   const [selectedSensors, setSelectedSensors] = useState(['temp', 'ph']);
   const [inletState, setInletState] = useState(false);
   const [drainState, setDrainState] = useState(false);
@@ -48,6 +48,16 @@ export default function ControlPanel({ onMeasure, onPump, isMeasuring }) {
     await onPump('drain', next);
   };
 
+  const handleClearQueue = async () => {
+    if (!onClearQueue) return;
+    setLoading(true);
+    try {
+      await onClearQueue();
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="glass-card">
       <div className="section-title">
@@ -65,7 +75,7 @@ export default function ControlPanel({ onMeasure, onPump, isMeasuring }) {
           onClick={handleMeasureAll}
           disabled={loading}
         >
-          🚀 Đo Toàn Bộ Chỉ Số (Bơm $\rightarrow$ Đo tất cả $\rightarrow$ Xả)
+          🚀 Đo Toàn Bộ Chỉ Số (ph + turbidity + tds)
         </button>
       </div>
 
@@ -94,6 +104,20 @@ export default function ControlPanel({ onMeasure, onPump, isMeasuring }) {
         >
           🧪 Kích Hoạt Đo Theo Mục Đã Chọn ({selectedSensors.length})
         </button>
+        <button
+          className="btn btn-secondary"
+          style={{
+            width: '100%',
+            justifyContent: 'center',
+            marginTop: '10px',
+            borderColor: 'rgba(248, 113, 113, 0.45)',
+            color: 'var(--danger)',
+          }}
+          onClick={handleClearQueue}
+          disabled={loading}
+        >
+          🗑 Xóa hết hàng đợi (clear_queue)
+        </button>
       </div>
 
       <div
@@ -106,13 +130,13 @@ export default function ControlPanel({ onMeasure, onPump, isMeasuring }) {
           marginBottom: '20px',
         }}
       >
-        💡 <b>Hàng đợi thông minh:</b> Nếu bạn gửi thêm lệnh khi buồng đo đang có nước, ESP32 sẽ tự động chèn thêm chỉ số vào lượt đo hiện tại mà không cần bơm xả lại.
+        💡 <b>Đo độc lập:</b> Lệnh measure chỉ đọc cảm biến. Bơm nạp / xả do bạn gửi lệnh pump riêng (tự tắt khi phao đầy/cạn hoặc sau 60s).
       </div>
 
       {/* Action 3: Manual Pump Controls */}
       <div>
         <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px' }}>
-          Điều Khiển Bơm Thủ Công (Bảo trì / Xả cạn):
+          Điều Khiển Bơm / Xả Thủ Công (phao hoặc timeout 60s):
         </div>
         <div className="btn-group" style={{ margin: 0 }}>
           <button

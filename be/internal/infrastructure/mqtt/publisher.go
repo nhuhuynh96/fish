@@ -47,6 +47,17 @@ func (p *CommandPublisher) PublishPump(ctx context.Context, deviceID string, tar
 	return p.client.Publish(topic, payload)
 }
 
+func (p *CommandPublisher) PublishClearQueue(ctx context.Context, deviceID string) error {
+	topic := fmt.Sprintf("fish/%s/command", deviceID)
+	payload, err := json.Marshal(map[string]any{
+		"action": "clear_queue",
+	})
+	if err != nil {
+		return err
+	}
+	return p.client.Publish(topic, payload)
+}
+
 func (p *CommandPublisher) PublishSchedule(ctx context.Context, deviceID string, enabled bool, temp, ph, turb, tds int) error {
 	topic := fmt.Sprintf("fish/%s/command", deviceID)
 	payload, err := json.Marshal(map[string]any{

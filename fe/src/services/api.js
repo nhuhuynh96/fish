@@ -48,6 +48,14 @@ export const api = {
     return res.json();
   },
 
+  async clearQueue(deviceId) {
+    const res = await fetch(`${API_BASE}/devices/${deviceId}/clear-queue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return res.json();
+  },
+
   async setSchedule(deviceId, { autoEnabled, tempInterval, phInterval, turbInterval, tdsInterval }) {
     const res = await fetch(`${API_BASE}/devices/${deviceId}/schedule`, {
       method: 'POST',
@@ -61,6 +69,12 @@ export const api = {
       }),
     });
     return res.json();
+  },
+
+  async getSchedule(deviceId) {
+    const res = await fetch(`${API_BASE}/devices/${deviceId}/schedule`);
+    const json = await res.json();
+    return json.data || null;
   },
 
   async toggleAuto(deviceId, enabled) {
