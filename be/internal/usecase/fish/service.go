@@ -62,7 +62,7 @@ func (s *Service) SetNarrator(n advice.Narrator) {
 	s.narrator = n
 }
 
-// 1. Kích hoạt đo lường từ Backend
+// 1. Kích hoạt đo lường từ Backend — ESP tự xếp FILL mức 1 → pH/turb → FILL mức 2 → TDS → DRAIN
 func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, sensors []string) error {
 	if len(sensors) == 0 {
 		sensors = []string{"all"}
@@ -273,7 +273,10 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 	s.updateDeviceSeen(ctx, body.DeviceID, body.State)
 
 	// Broadcast realtime event qua WebSocket
-	s.hub.Broadcast("sampling_event", e)
+	if s.hub != nil {
+		s.hub.Broadcast("sampling_event", e)
+	}
+
 	return nil
 }
 

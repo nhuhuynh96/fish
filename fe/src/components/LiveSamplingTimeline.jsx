@@ -2,9 +2,9 @@ import React from 'react';
 
 export default function LiveSamplingTimeline({ currentState, latestEvent }) {
   const steps = [
-    { key: 'FILLING_WATER', label: '1. Bơm Nạp', desc: 'Đầu queue: bơm đến phao đầy' },
-    { key: 'STABILIZING', label: '2. Đo Cảm Biến', desc: 'Đọc ADC từng sensor' },
-    { key: 'DRAINING_WATER', label: '3. Xả Nước', desc: 'Cuối queue: xả đến phao cạn' },
+    { key: 'FILLING_WATER', label: '1. Bơm Nạp', desc: 'Mức 1 (pH/turb) hoặc mức 2 (TDS)' },
+    { key: 'STABILIZING', label: '2. Đo Cảm Biến', desc: 'Đọc ADC; TDS luôn sau mức 2' },
+    { key: 'DRAINING_WATER', label: '3. Xả Nước', desc: 'Cuối queue — 30s' },
   ];
 
   const getStepStatus = (stepKey, index) => {
@@ -29,7 +29,7 @@ export default function LiveSamplingTimeline({ currentState, latestEvent }) {
         Tiến Trình Đo Cảm Biến
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-        Measure xếp queue: bơm nạp (đầu) → đo cảm biến → xả (cuối). Phao đầy/cạn hoặc tối đa 60s.
+        ESP xếp queue: FILL mức 1 → pH/turb → FILL mức 2 → TDS → DRAIN 30s.
       </p>
 
       <div className="timeline-stepper">

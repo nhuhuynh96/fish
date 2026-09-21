@@ -17,9 +17,10 @@ void SamplingManager::begin() {
     digitalWrite(INLET_PUMP_PIN, PUMP_OFF_LEVEL);
     pinMode(DRAIN_VALVE_PIN, OUTPUT);
     digitalWrite(DRAIN_VALVE_PIN, PUMP_OFF_LEVEL);
-    pinMode(FLOAT_FULL_PIN, INPUT_PULLUP);
-    pinMode(FLOAT_EMPTY_PIN, INPUT_PULLUP);
-    LOGLN("[Sampling] Relay: bơm=GPIO18, van=GPIO19 | Phao: đầy=GPIO4, cạn=GPIO17");
+    pinMode(FLOAT_HIGH_PIN, INPUT_PULLUP);
+    pinMode(FLOAT_LOW_PIN, INPUT_PULLUP);
+    LOGLN("[Sampling] Relay: bơm=GPIO18, van=GPIO19");
+    LOGLN("[Sampling] Phao: mức 1 pH+turb=GPIO17, mức 2 TDS=GPIO4 | Xả cố định 30s");
 
     pinMode(TDS_SENSOR_PIN, INPUT);
     analogReadResolution(12);
@@ -39,7 +40,7 @@ void SamplingManager::begin() {
     pinMode(TDS_POWER_PIN, OUTPUT);
     powerOffAllSensors();
     LOGLN("[Sampling] Power: pH=GPIO14, Turbidity=GPIO33, TDS=GPIO25 (2N3904).");
-    LOGLN("[Sampling] FSM: mỗi lệnh đo = bơm nạp (đầu queue) → đo → xả (cuối queue).");
+    LOGLN("[Sampling] FSM: MEASURE tự xếp FILL mức 1 → pH/turb → FILL mức 2 → TDS → DRAIN.");
 }
 
 String SamplingManager::getStateName() const {
@@ -64,12 +65,15 @@ String SamplingManager::getSensorName(SensorType type) const {
     }
 }
 
+const char *SamplingManager::fillLevelName(FillLevel level) const {
+    return level == FILL_LEVEL_HIGH ? "mức 2/TDS" : "mức 1/pH+turb";
+}
+
 bool SamplingManager::parseSensorName(const String &name, std::vector<SensorType> &outList) {
     String n = name;
     n.toLowerCase();
     n.trim();
 
-    // "all" = cảm biến có phần cứng (chưa có temp)
     if (n == "all" || n == "tat_ca") {
         outList.push_back(SENSOR_PH);
         outList.push_back(SENSOR_TURBIDITY);
@@ -130,8 +134,11 @@ void SamplingManager::emitEvent(const String &stage, const String &message, cons
         payload += "\"message\":\"" + message + "\",";
         payload += "\"inlet_on\":" + String(isInletOn() ? "true" : "false") + ",";
         payload += "\"drain_on\":" + String(isDrainOn() ? "true" : "false") + ",";
-        payload += "\"float_full\":" + String(isWaterFull() ? "true" : "false") + ",";
-        payload += "\"float_empty\":" + String(isWaterEmpty() ? "true" : "false");
+        payload += "\"float_low\":" + String(isWaterLow() ? "true" : "false") + ",";
+        payload += "\"float_high\":" + String(isWaterHigh() ? "true" : "false") + ",";
+        // giữ tên cũ cho FE/log cũ
+        payload += "\"float_full\":" + String(isWaterHigh() ? "true" : "false") + ",";
+        payload += "\"float_empty\":" + String(isWaterLow() ? "true" : "false");
         if (extraJson.length() > 0) {
             payload += "," + extraJson;
         }
@@ -140,12 +147,20 @@ void SamplingManager::emitEvent(const String &stage, const String &message, cons
     }
 }
 
-bool SamplingManager::isWaterFull() const {
-    return digitalRead(FLOAT_FULL_PIN) == FLOAT_FULL_LEVEL;
+bool SamplingManager::isWaterLow() const {
+    return digitalRead(FLOAT_LOW_PIN) == FLOAT_ACTIVE_LEVEL;
 }
 
-bool SamplingManager::isWaterEmpty() const {
-    return digitalRead(FLOAT_EMPTY_PIN) == FLOAT_EMPTY_LEVEL;
+bool SamplingManager::isWaterHigh() const {
+    return digitalRead(FLOAT_HIGH_PIN) == FLOAT_ACTIVE_LEVEL;
+}
+
+bool SamplingManager::isFillTargetReached() const {
+    if (currentFillLevel == FILL_LEVEL_HIGH) {
+        return isWaterHigh();
+    }
+    // Mức 1: phao GPIO17 HOẶC đã vượt lên mức 2 (GPIO4)
+    return isWaterLow() || isWaterHigh();
 }
 
 bool SamplingManager::isInletOn() const {
@@ -157,15 +172,15 @@ bool SamplingManager::isDrainOn() const {
 }
 
 void SamplingManager::logFloatPins(const char *why) const {
-    int fullPin = digitalRead(FLOAT_FULL_PIN);
-    int emptyPin = digitalRead(FLOAT_EMPTY_PIN);
+    int highPin = digitalRead(FLOAT_HIGH_PIN);
+    int lowPin = digitalRead(FLOAT_LOW_PIN);
     LOGF(
-        "[Phao] %s | GPIO4 đầy=%s (%s) | GPIO17 cạn=%s (%s)\n",
+        "[Phao] %s | GPIO17 mức1=%s (%s) | GPIO4 mức2=%s (%s)\n",
         why,
-        fullPin == LOW ? "LOW/đóng" : "HIGH/mở",
-        isWaterFull() ? "firmware=ĐẦY" : "firmware=chưa đầy",
-        emptyPin == LOW ? "LOW/đóng" : "HIGH/mở",
-        isWaterEmpty() ? "firmware=CẠN" : "firmware=chưa cạn"
+        lowPin == LOW ? "LOW/đóng" : "HIGH/mở",
+        isWaterLow() ? "firmware=ĐỦ_MỨC_1" : "firmware=chưa mức 1",
+        highPin == LOW ? "LOW/đóng" : "HIGH/mở",
+        isWaterHigh() ? "firmware=ĐỦ_MỨC_2" : "firmware=chưa mức 2"
     );
 }
 
@@ -247,16 +262,54 @@ void SamplingManager::transitionTo(SamplingState newState) {
     stateTimer = millis();
 
     if (newState == STATE_FILLING) {
-        floatFullSince = 0;
-        manualInletActive = false; // FSM FILLING quản lý bơm
-        setInletPump(!isWaterFull());
+        floatTargetSince = 0;
+        manualInletActive = false;
+        setInletPump(!isFillTargetReached());
+        LOGF("[Sampling] FILL mục tiêu mức %s\n", fillLevelName(currentFillLevel));
     }
 
     if (newState == STATE_DRAINING) {
-        floatEmptySince = 0;
         manualDrainActive = false;
-        setDrainValve(!isWaterEmpty());
+        setDrainValve(true);
     }
+}
+
+void SamplingManager::pushFill(FillLevel level) {
+    PendingCommand fillCmd;
+    fillCmd.type = CMD_FILL;
+    fillCmd.fillLevel = level;
+    commandQueue.push(fillCmd);
+    LOGF("[Sampling] Queue +FILL %s (queue=%u)\n",
+         fillLevelName(level), (unsigned)commandQueue.size());
+}
+
+void SamplingManager::pushMeasure(SensorType sensor) {
+    PendingCommand cmd;
+    cmd.type = CMD_MEASURE;
+    cmd.sensor = sensor;
+    commandQueue.push(cmd);
+    LOGF(
+        "[Sampling] Queue +MEASURE %s (queue=%u)\n",
+        getSensorName(sensor).c_str(),
+        (unsigned)commandQueue.size()
+    );
+}
+
+void SamplingManager::pushDrain() {
+    PendingCommand drainCmd;
+    drainCmd.type = CMD_DRAIN;
+    commandQueue.push(drainCmd);
+    LOGF("[Sampling] Queue +DRAIN 30s (queue=%u)\n", (unsigned)commandQueue.size());
+}
+
+void SamplingManager::enqueueFill(FillLevel level) {
+    pushFill(level);
+    emitEvent("queued", String("Đã xếp FILL mức ") + fillLevelName(level) + " vào queue.");
+}
+
+void SamplingManager::enqueueDrain() {
+    pushDrain();
+    emitEvent("queued", "Đã xếp DRAIN 30s vào queue.");
 }
 
 void SamplingManager::enqueueMeasure(const std::vector<String> &sensors) {
@@ -269,34 +322,43 @@ void SamplingManager::enqueueMeasure(const std::vector<String> &sensors) {
         return;
     }
 
-    // Lệnh đo mới từ người dùng → cho phép thử bơm lại sau khi đã abort
     fillFailCount = 0;
 
-    PendingCommand fillCmd;
-    fillCmd.type = CMD_FILL;
-    commandQueue.push(fillCmd);
-    LOGF("[Sampling] Queue +FILL (queue=%u)\n", (unsigned)commandQueue.size());
-
+    bool hasLow = false;
+    bool hasTds = false;
     for (SensorType t : list) {
-        PendingCommand cmd;
-        cmd.type = CMD_MEASURE;
-        cmd.sensor = t;
-        commandQueue.push(cmd);
-        LOGF(
-            "[Sampling] Queue +MEASURE %s (queue=%u)\n",
-            getSensorName(t).c_str(),
-            (unsigned)commandQueue.size()
-        );
+        if (t == SENSOR_TDS) {
+            hasTds = true;
+        } else {
+            hasLow = true;
+        }
     }
 
-    PendingCommand drainCmd;
-    drainCmd.type = CMD_DRAIN;
-    commandQueue.push(drainCmd);
-    LOGF("[Sampling] Queue +DRAIN (queue=%u)\n", (unsigned)commandQueue.size());
+    // Phao mức 1 (GPIO17): dừng khi báo đủ → đo pH / turbidity (và temp nếu có)
+    if (hasLow) {
+        pushFill(FILL_LEVEL_LOW);
+        for (SensorType t : list) {
+            if (t != SENSOR_TDS) {
+                pushMeasure(t);
+            }
+        }
+    }
+
+    // Có TDS thì bơm tiếp tới phao mức 2 (GPIO4) rồi mới đo
+    if (hasTds) {
+        pushFill(FILL_LEVEL_HIGH);
+        pushMeasure(SENSOR_TDS);
+    }
+
+    pushDrain();
 
     emitEvent(
         "queued",
-        "Đã xếp bơm nạp → " + String((unsigned)list.size()) + " lệnh đo → xả vào commandQueue."
+        "Đã xếp chu trình đo: " +
+            String(hasLow ? "FILL mức 1 → pH/turb" : "") +
+            String(hasLow && hasTds ? " → " : "") +
+            String(hasTds ? "FILL mức 2 → TDS" : "") +
+            " → DRAIN."
     );
 }
 
@@ -316,8 +378,11 @@ void SamplingManager::enqueuePump(const String &target, bool state) {
     cmd.pumpState = state;
     commandQueue.push(cmd);
     LOGF("[Sampling] Queue +PUMP %s=%s (queue=%u)\n",
-                  t.c_str(), state ? "ON" : "OFF", (unsigned)commandQueue.size());
-    emitEvent("queued", "Đã xếp lệnh bơm vào commandQueue.");
+         t.c_str(), state ? "ON" : "OFF", (unsigned)commandQueue.size());
+    emitEvent(
+        "queued",
+        String("Đã xếp PUMP ") + t + "=" + (state ? "ON" : "OFF") + " vào queue."
+    );
 }
 
 void SamplingManager::enqueueStatus() {
@@ -350,7 +415,9 @@ void SamplingManager::publishStatus() {
     statusJson += "\"device_id\":\"" + currentConfig.device_id + "\",";
     statusJson += "\"state\":\"" + getStateName() + "\",";
     statusJson += "\"is_busy\":" + String(isBusy() ? "true" : "false") + ",";
-    statusJson += "\"queue_size\":" + String((unsigned)commandQueue.size());
+    statusJson += "\"queue_size\":" + String((unsigned)commandQueue.size()) + ",";
+    statusJson += "\"float_low\":" + String(isWaterLow() ? "true" : "false") + ",";
+    statusJson += "\"float_high\":" + String(isWaterHigh() ? "true" : "false");
     statusJson += "}";
 
     LOGLN("[Sampling] Status: " + statusJson);
@@ -375,26 +442,28 @@ void SamplingManager::processCommandQueue() {
             startMeasureCycle(cmd.sensor);
             break;
         case CMD_FILL:
-            if (isWaterFull()) {
-                LOGLN("[Sampling] FILL: phao đã đầy, bỏ qua bơm nạp.");
-                emitEvent("filled", "Phao đã đầy. Bỏ qua bơm nạp, tiếp tục đo.");
+            currentFillLevel = cmd.fillLevel;
+            if (isFillTargetReached()) {
+                LOGF("[Sampling] FILL %s: đã đủ mức, bỏ qua bơm.\n", fillLevelName(cmd.fillLevel));
+                emitEvent(
+                    "filled",
+                    String("Đã đủ mức ") + fillLevelName(cmd.fillLevel) + ". Bỏ qua bơm, tiếp tục đo."
+                );
                 processCommandQueue();
             } else {
-                LOGLN("[Sampling] Chạy FILL từ hàng đợi (đầu chu trình đo).");
+                LOGF("[Sampling] Chạy FILL mức %s.\n", fillLevelName(cmd.fillLevel));
                 transitionTo(STATE_FILLING);
-                emitEvent("filling", "Bắt đầu bơm nạp nước trước khi đo.");
+                emitEvent(
+                    "filling",
+                    String("Bơm nạp tới mức ") + fillLevelName(cmd.fillLevel) + "."
+                );
             }
             break;
         case CMD_DRAIN:
-            if (isWaterEmpty()) {
-                LOGLN("[Sampling] DRAIN: phao đã cạn, bỏ qua xả.");
-                emitEvent("drained", "Phao đã cạn. Bỏ qua xả nước.");
-                processCommandQueue();
-            } else {
-                LOGLN("[Sampling] Chạy DRAIN từ hàng đợi (cuối chu trình đo).");
-                transitionTo(STATE_DRAINING);
-                emitEvent("draining", "Bắt đầu xả nước sau khi đo xong.");
-            }
+            LOGLN("[Sampling] >>> Chạy DRAIN cố định 30s (không phao cạn) <<<");
+            transitionTo(STATE_DRAINING);
+            logFloatPins("bắt đầu xả 30s");
+            emitEvent("draining", "Xả nước cố định 30 giây.");
             break;
         case CMD_PUMP:
             LOGLN("[Sampling] Chạy PUMP từ hàng đợi");
@@ -412,9 +481,8 @@ void SamplingManager::startMeasureCycle(SensorType sensor) {
     currentResult = SensorResult();
     currentResult.startTime = millis();
 
-    LOGF("\n[Sampling] >>> BẮT ĐẦU ĐO [%s] (không kiểm tra mực nước) <<<\n",
-         getSensorName(sensor).c_str());
-    emitEvent("stabilizing", "Bắt đầu đo cảm biến (đã nạp nước ở đầu queue).");
+    LOGF("\n[Sampling] >>> BẮT ĐẦU ĐO [%s] <<<\n", getSensorName(sensor).c_str());
+    emitEvent("stabilizing", "Bắt đầu đo cảm biến.");
     transitionTo(STATE_STABILIZING);
 }
 
@@ -424,12 +492,12 @@ void SamplingManager::setManualPump(const String &target, bool state) {
     t.trim();
 
     if (t == "inlet") {
-        if (state && isWaterFull()) {
+        if (state && isWaterHigh()) {
             setInletPump(false);
             manualInletActive = false;
             logFloatPins("từ chối bật bơm nạp");
-            LOGLN("[Sampling] [Manual] Từ chối bật bơm: phao đang báo đầy.");
-            emitEvent("manual_pump", "Không bật bơm vì phao đang báo nước đầy.");
+            LOGLN("[Sampling] [Manual] Từ chối bật bơm: phao cao đã đủ.");
+            emitEvent("manual_pump", "Không bật bơm vì phao mức cao đang báo đủ.");
             return;
         }
 
@@ -437,9 +505,9 @@ void SamplingManager::setManualPump(const String &target, bool state) {
         manualInletActive = state;
         if (state) {
             manualInletSince = millis();
-            floatFullSince = 0;
+            floatHighSince = 0;
             logFloatPins("bật bơm nạp");
-            LOGF("[Sampling] [Manual] Bơm nạp: BẬT (tắt khi phao đầy ổn định hoặc sau %lus)\n",
+            LOGF("[Sampling] [Manual] Bơm nạp: BẬT (tắt khi phao cao hoặc sau %lus)\n",
                  MAX_MANUAL_PUMP_TIME / 1000UL);
         } else {
             LOGLN("[Sampling] [Manual] Bơm nạp: TẮT");
@@ -449,23 +517,14 @@ void SamplingManager::setManualPump(const String &target, bool state) {
     }
 
     if (t == "drain") {
-        if (state && isWaterEmpty()) {
-            setDrainValve(false);
-            manualDrainActive = false;
-            logFloatPins("từ chối mở van xả");
-            LOGLN("[Sampling] [Manual] Từ chối mở van: phao đang báo cạn.");
-            emitEvent("manual_pump", "Không mở van xả vì phao đang báo nước cạn.");
-            return;
-        }
-
+        // Không dùng phao cạn: bật/tắt thủ công, tự tắt sau timeout
         setDrainValve(state);
         manualDrainActive = state;
         if (state) {
             manualDrainSince = millis();
-            floatEmptySince = 0;
-            logFloatPins("bật van xả");
-            LOGF("[Sampling] [Manual] Van xả: BẬT (tắt khi phao cạn ổn định hoặc sau %lus)\n",
-                 MAX_MANUAL_PUMP_TIME / 1000UL);
+            logFloatPins("bật van xả thủ công");
+            LOGF("[Sampling] [Manual] Van xả: BẬT (tự tắt sau %lus, không phao cạn)\n",
+                 DRAIN_FIXED_TIME / 1000UL);
         } else {
             LOGLN("[Sampling] [Manual] Van xả: TẮT");
         }
@@ -478,31 +537,30 @@ void SamplingManager::setManualPump(const String &target, bool state) {
 }
 
 void SamplingManager::handleManualPumpTimeouts() {
-    // Bơm/xả thủ công độc lập với chu trình đo
     if (manualInletActive) {
         unsigned long onFor = millis() - manualInletSince;
         if (onFor < PUMP_FLOAT_GRACE_MS) {
-            floatFullSince = 0;
-        } else if (isWaterFull()) {
-            if (floatFullSince == 0) {
-                floatFullSince = millis();
+            floatHighSince = 0;
+        } else if (isWaterHigh()) {
+            if (floatHighSince == 0) {
+                floatHighSince = millis();
             }
-            if (millis() - floatFullSince >= FLOAT_DEBOUNCE_TIME) {
+            if (millis() - floatHighSince >= FLOAT_DEBOUNCE_TIME) {
                 setInletPump(false);
                 manualInletActive = false;
-                floatFullSince = 0;
-                logFloatPins("phao đầy ổn định → tắt bơm nạp");
-                LOGLN("[Sampling] [Manual] Phao đầy → tắt bơm nạp.");
-                emitEvent("manual_pump", "Phao đầy. Đã tự tắt bơm nạp.");
+                floatHighSince = 0;
+                logFloatPins("phao cao ổn định → tắt bơm nạp");
+                LOGLN("[Sampling] [Manual] Phao mức cao → tắt bơm nạp.");
+                emitEvent("manual_pump", "Phao mức cao. Đã tự tắt bơm nạp.");
             }
         } else {
-            floatFullSince = 0;
+            floatHighSince = 0;
         }
 
         if (manualInletActive && onFor >= MAX_MANUAL_PUMP_TIME) {
             setInletPump(false);
             manualInletActive = false;
-            floatFullSince = 0;
+            floatHighSince = 0;
             logFloatPins("hết 60s → tắt bơm nạp");
             LOGLN("[Sampling] [Manual] Hết 60s → tắt bơm nạp (an toàn).");
             emitEvent("manual_pump_timeout", "Bơm nạp thủ công quá 60s. Đã tự tắt.");
@@ -511,31 +569,11 @@ void SamplingManager::handleManualPumpTimeouts() {
 
     if (manualDrainActive) {
         unsigned long onFor = millis() - manualDrainSince;
-        if (onFor < PUMP_FLOAT_GRACE_MS) {
-            floatEmptySince = 0;
-        } else if (isWaterEmpty()) {
-            if (floatEmptySince == 0) {
-                floatEmptySince = millis();
-            }
-            if (millis() - floatEmptySince >= FLOAT_DEBOUNCE_TIME) {
-                setDrainValve(false);
-                manualDrainActive = false;
-                floatEmptySince = 0;
-                logFloatPins("phao cạn ổn định → tắt van xả");
-                LOGLN("[Sampling] [Manual] Phao cạn → tắt van xả.");
-                emitEvent("manual_pump", "Phao cạn. Đã tự tắt van xả.");
-            }
-        } else {
-            floatEmptySince = 0;
-        }
-
-        if (manualDrainActive && onFor >= MAX_MANUAL_PUMP_TIME) {
+        if (onFor >= DRAIN_FIXED_TIME) {
             setDrainValve(false);
             manualDrainActive = false;
-            floatEmptySince = 0;
-            logFloatPins("hết 60s → tắt van xả");
-            LOGLN("[Sampling] [Manual] Hết 60s → tắt van xả (an toàn).");
-            emitEvent("manual_pump_timeout", "Van xả thủ công quá 60s. Đã tự tắt.");
+            LOGLN("[Sampling] [Manual] Hết 30s → tắt van xả.");
+            emitEvent("manual_pump_timeout", "Van xả thủ công đủ 30s. Đã tự tắt.");
         }
     }
 }
@@ -623,9 +661,10 @@ void SamplingManager::publishSensorReading(SensorType type) {
 void SamplingManager::finishCycle() {
     transitionTo(STATE_IDLE);
     if (commandQueue.empty()) {
-        emitEvent("idle", "Đã đo xong. Queue rỗng. Sẵn sàng.");
+        emitEvent("idle", "Đã xử lý xong. Queue rỗng. Sẵn sàng.");
     } else {
-        emitEvent("idle", "Đã đo xong. Còn lệnh trong queue, chạy tiếp...");
+        emitEvent("idle", "Đã xử lý xong. Còn lệnh trong queue, chạy tiếp...");
+        processCommandQueue();
     }
 }
 
@@ -639,26 +678,31 @@ void SamplingManager::handleStateIdle() {
 
 void SamplingManager::handleStateFilling(unsigned long elapsed) {
     if (elapsed < PUMP_FLOAT_GRACE_MS) {
-        floatFullSince = 0;
-    } else if (isWaterFull()) {
-        if (floatFullSince == 0) {
-            floatFullSince = millis();
+        floatTargetSince = 0;
+    } else if (isFillTargetReached()) {
+        if (floatTargetSince == 0) {
+            floatTargetSince = millis();
         }
-        if (millis() - floatFullSince >= FLOAT_DEBOUNCE_TIME) {
+        if (millis() - floatTargetSince >= FLOAT_DEBOUNCE_TIME) {
             fillFailCount = 0;
-            logFloatPins("chu trình đo: phao đầy ổn định");
-            LOGLN("[Sampling] [Phao] NƯỚC ĐẦY. Tắt bơm.");
+            logFloatPins("chu trình đo: đủ mức mục tiêu");
+            LOGF("[Sampling] [Phao] Đủ mức %s. Tắt bơm.\n", fillLevelName(currentFillLevel));
             transitionTo(STATE_IDLE);
-            emitEvent("filled", "Phao báo NƯỚC ĐẦY. Tắt bơm, tiếp tục hàng đợi đo.");
+            emitEvent(
+                "filled",
+                String("Đã đủ mức ") + fillLevelName(currentFillLevel) + ". Tắt bơm, tiếp tục đo."
+            );
+            processCommandQueue();
             return;
         }
     } else {
-        floatFullSince = 0;
+        floatTargetSince = 0;
     }
 
     if (elapsed >= MAX_FILL_TIME) {
         fillFailCount++;
-        LOGF("[Sampling] LỖI: Bơm quá %lus chưa đầy.\n", MAX_FILL_TIME / 1000UL);
+        LOGF("[Sampling] LỖI: Bơm quá %lus chưa tới mức %s.\n",
+             MAX_FILL_TIME / 1000UL, fillLevelName(currentFillLevel));
         powerOffAllSensors();
 
         if (fillFailCount >= MAX_FILL_FAILS) {
@@ -666,7 +710,7 @@ void SamplingManager::handleStateFilling(unsigned long elapsed) {
             clearCommandQueue();
             fillFailCount = 0;
             LOGF(
-                "[Sampling] ABORT: timeout bơm %u lần liên tiếp → hủy %u lệnh còn lại.\n",
+                "[Sampling] ABORT: timeout bơm %u lần → hủy %u lệnh còn lại.\n",
                 (unsigned)MAX_FILL_FAILS,
                 (unsigned)dropped
             );
@@ -683,9 +727,10 @@ void SamplingManager::handleStateFilling(unsigned long elapsed) {
         emitEvent(
             "fill_timeout",
             "Quá thời gian nạp nước (" + String(fillFailCount) + "/" +
-                String(MAX_FILL_FAILS) + "). Hủy lệnh đo hiện tại."
+                String(MAX_FILL_FAILS) + "). Hủy lệnh FILL hiện tại, chạy lệnh queue tiếp theo."
         );
         transitionTo(STATE_IDLE);
+        processCommandQueue();
     }
 }
 
@@ -701,37 +746,19 @@ void SamplingManager::handleStateStabilizing(unsigned long elapsed) {
 }
 
 void SamplingManager::handleStateMeasuring(unsigned long /*elapsed*/) {
-    // Đo thực hiện một lần trong handleStateStabilizing rồi chuyển PUBLISHING.
 }
 
 void SamplingManager::handleStateDraining(unsigned long elapsed) {
-    if (elapsed < PUMP_FLOAT_GRACE_MS) {
-        floatEmptySince = 0;
-    } else if (isWaterEmpty()) {
-        if (floatEmptySince == 0) {
-            floatEmptySince = millis();
-        }
-        if (millis() - floatEmptySince >= FLOAT_DEBOUNCE_TIME) {
-            logFloatPins("chu trình đo: phao cạn ổn định");
-            LOGLN("[Sampling] [Phao] NƯỚC CẠN. Tắt van.");
-            transitionTo(STATE_IDLE);
-            emitEvent("drained", "Phao báo nước cạn. Đã tắt van xả.");
-            if (commandQueue.empty()) {
-                emitEvent("idle", "Đã xả xong. Queue rỗng. Sẵn sàng.");
-            } else {
-                emitEvent("idle", "Đã xả xong. Còn lệnh trong queue, chạy tiếp...");
-            }
-            return;
-        }
-    } else {
-        floatEmptySince = 0;
-    }
-
-    if (elapsed >= MAX_DRAIN_TIME) {
-        LOGF("[Sampling] LỖI: Xả quá %lus chưa cạn.\n", MAX_DRAIN_TIME / 1000UL);
-        emitEvent("drain_timeout", "Quá thời gian xả nước. Đã tắt van.");
+    if (elapsed >= DRAIN_FIXED_TIME) {
+        LOGLN("[Sampling] Xả đủ 30s. Tắt van.");
         transitionTo(STATE_IDLE);
-        emitEvent("idle", "Hết timeout xả. Hệ thống sẵn sàng.");
+        emitEvent("drained", "Đã xả đủ 30 giây. Tắt van.");
+        if (commandQueue.empty()) {
+            emitEvent("idle", "Đã xả xong. Queue rỗng. Sẵn sàng.");
+        } else {
+            emitEvent("idle", "Đã xả xong. Còn lệnh trong queue, chạy tiếp...");
+            processCommandQueue();
+        }
     }
 }
 

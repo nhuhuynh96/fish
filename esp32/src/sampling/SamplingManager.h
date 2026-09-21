@@ -29,11 +29,18 @@ enum CommandType {
     CMD_DRAIN
 };
 
+// Mức nạp nước theo phao
+enum FillLevel {
+    FILL_LEVEL_LOW = 0,  // GPIO17 mức 1: đủ cho pH / turbidity
+    FILL_LEVEL_HIGH = 1  // GPIO4 mức 2: đủ cho TDS
+};
+
 struct PendingCommand {
     CommandType type = CMD_STATUS;
     SensorType sensor = SENSOR_TEMP;
     String pumpTarget = "inlet";
     bool pumpState = false;
+    FillLevel fillLevel = FILL_LEVEL_LOW;
 };
 
 struct RawReading {
@@ -63,6 +70,8 @@ public:
     void handle();
 
     void enqueueMeasure(const std::vector<String> &sensors);
+    void enqueueFill(FillLevel level);
+    void enqueueDrain();
     void enqueuePump(const String &target, bool state);
     void enqueueStatus();
     void clearQueue();
@@ -80,37 +89,36 @@ private:
 
     std::queue<PendingCommand> commandQueue;
 
-    // Cảm biến của lệnh MEASURE đang chạy
     SensorType currentSensor = SENSOR_PH;
+    FillLevel currentFillLevel = FILL_LEVEL_LOW;
 
     SensorResult currentResult;
 
     unsigned long stateTimer = 0;
-    unsigned long floatFullSince = 0;
-    unsigned long floatEmptySince = 0;
+    unsigned long floatTargetSince = 0;
     uint8_t fillFailCount = 0;
 
     bool manualInletActive = false;
     bool manualDrainActive = false;
     unsigned long manualInletSince = 0;
     unsigned long manualDrainSince = 0;
+    unsigned long floatHighSince = 0;
 
     const unsigned long STABILIZE_TIME = 500;
-    const unsigned long MAX_FILL_TIME = 60000;   // nạp nước: phao đầy hoặc tối đa 60s
-    const unsigned long MAX_DRAIN_TIME = 60000;
-    const unsigned long FLOAT_DEBOUNCE_TIME = 800;   // tiếp điểm phải giữ ổn định mới tin
-    const unsigned long PUMP_FLOAT_GRACE_MS = 1000;  // bỏ qua phao 1s sau khi bật relay (nhiễu)
-    const unsigned long MAX_MANUAL_PUMP_TIME = 60000; // bơm/van thủ công: phao hoặc 60s
+    const unsigned long MAX_FILL_TIME = 60000;
+    const unsigned long DRAIN_FIXED_TIME = 30000; // xả cố định 30s, không dùng phao cạn
+    const unsigned long FLOAT_DEBOUNCE_TIME = 800;
+    const unsigned long PUMP_FLOAT_GRACE_MS = 1000;
+    const unsigned long MAX_MANUAL_PUMP_TIME = 60000;
     static const uint8_t MAX_FILL_FAILS = 3;
 
     const uint8_t INLET_PUMP_PIN = 18;
     const uint8_t DRAIN_VALVE_PIN = 19;
-    const uint8_t FLOAT_FULL_PIN = 4;
-    const uint8_t FLOAT_EMPTY_PIN = 17;
+    const uint8_t FLOAT_HIGH_PIN = 4;   // phao mức 2 → TDS
+    const uint8_t FLOAT_LOW_PIN = 17;   // phao mức 1 → pH / turbidity
     const uint8_t PUMP_ON_LEVEL = LOW;
     const uint8_t PUMP_OFF_LEVEL = HIGH;
-    const uint8_t FLOAT_FULL_LEVEL = LOW;
-    const uint8_t FLOAT_EMPTY_LEVEL = LOW;
+    const uint8_t FLOAT_ACTIVE_LEVEL = LOW;
 
     const uint8_t TDS_SENSOR_PIN = 35;
     const int TDS_ADC_MAX = 4095;
@@ -137,6 +145,9 @@ private:
     void processCommandQueue();
     void startMeasureCycle(SensorType sensor);
     void clearCommandQueue();
+    void pushFill(FillLevel level);
+    void pushMeasure(SensorType sensor);
+    void pushDrain();
 
     void handleStateIdle();
     void handleStateFilling(unsigned long elapsed);
@@ -146,8 +157,9 @@ private:
     void handleStatePublishing();
     void handleManualPumpTimeouts();
 
-    bool isWaterFull() const;
-    bool isWaterEmpty() const;
+    bool isWaterLow() const;
+    bool isWaterHigh() const;
+    bool isFillTargetReached() const;
     bool isInletOn() const;
     bool isDrainOn() const;
     void logFloatPins(const char *why) const;
@@ -158,6 +170,7 @@ private:
     RawReading readRawADC(uint8_t pin, int sampleCount);
     int medianFilter(int *buffer, int count) const;
     String rawReadingJson(const RawReading &reading) const;
+    const char *fillLevelName(FillLevel level) const;
 
     void emitEvent(const String &stage, const String &message, const String &extraJson = "");
 

@@ -131,13 +131,13 @@ export default function ControlPanel({
           marginBottom: '20px',
         }}
       >
-        💡 <b>Chu trình đo:</b> mỗi lệnh đo xếp queue <b>bơm nạp → đo cảm biến → xả</b> (phao đầy/cạn hoặc tối đa 60s). Lịch auto cũng vậy. Bơm/xả thủ công bên dưới vẫn gửi lệnh riêng.
+        💡 <b>Chu trình đo (ESP xếp queue):</b> FILL mức 1 (phao GPIO17) → đo pH/turb → nếu có TDS thì FILL mức 2 (phao GPIO4) → đo TDS → DRAIN 30s.
       </div>
 
       {/* Action 3: Manual Pump Controls */}
       <div>
         <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px' }}>
-          Điều Khiển Bơm / Xả Thủ Công (phao hoặc timeout 60s):
+          Điều Khiển Bơm / Xả Thủ Công (xếp vào queue ESP):
         </div>
         <div className="btn-group" style={{ margin: 0 }}>
           <button

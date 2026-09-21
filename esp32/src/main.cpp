@@ -98,6 +98,28 @@ void handleMqttCommand(const String &msg) {
         return;
     }
 
+    // {"action":"fill","level":"low"|"high"} — bơm tới phao mức 1 / mức 2
+    if (action == "fill") {
+        String level = doc["level"] | "low";
+        level.toLowerCase();
+        level.trim();
+        if (level == "high" || level == "cao" || level == "tds" || level == "full" || level == "2" || level == "muc2") {
+            samplingManager.enqueueFill(FILL_LEVEL_HIGH);
+        } else if (level == "low" || level == "thap" || level == "mid" || level == "ph" || level == "1" || level == "muc1") {
+            samplingManager.enqueueFill(FILL_LEVEL_LOW);
+        } else {
+            publishCommandError("fill level phải là \"low\" hoặc \"high\".");
+            return;
+        }
+        return;
+    }
+
+    // {"action":"drain"} — xả cố định 30s
+    if (action == "drain" || action == "xa") {
+        samplingManager.enqueueDrain();
+        return;
+    }
+
     if (action == "pump") {
         String target = doc["target"] | "";
         target.toLowerCase();
@@ -133,7 +155,7 @@ void handleMqttCommand(const String &msg) {
         return;
     }
 
-    publishCommandError("action không hỗ trợ. Dùng measure | pump | status | clear_queue.");
+    publishCommandError("action không hỗ trợ. Dùng measure | fill | drain | pump | status | clear_queue.");
 }
 
 void setup() {
