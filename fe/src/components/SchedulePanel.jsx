@@ -119,7 +119,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
       </div>
 
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Auto chạy trên <b>backend scheduler</b> (mỗi giây kiểm tra lịch → gửi MQTT measure). ESP32 không tự đếm giờ.
+        Auto chạy trên <b>backend scheduler</b> (mỗi giây kiểm tra lịch → MQTT measure). ESP32 tự xếp <b>bơm nạp → đo → xả</b> cho mỗi lệnh. ESP32 không tự đếm giờ.
       </p>
 
       <div style={{ marginBottom: '16px' }}>

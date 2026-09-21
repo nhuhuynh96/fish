@@ -1,45 +1,59 @@
 import React from 'react';
 
-export default function SensorCards({ measurement }) {
+const EEL_FALLBACK = {
+  thresholds: {
+    temp_min: 26, temp_max: 32,
+    ph_min: 7.0, ph_max: 8.5,
+    turbidity_warn: 25, turbidity_max: 50,
+    tds_min: 100, tds_max: 800,
+  },
+  badges: {
+    temperature: { ok: 'Lý tưởng chình (26–32°C)', low: 'Hơi lạnh (<26°C)', high: 'Nóng (>32°C)' },
+    ph: { ok: 'Chuẩn hồ chình (7.0–8.5)', low: 'Nhiễm axit (<7.0)', high: 'Nhiễm kiềm (>8.5)' },
+    turbidity: { ok: 'Nước trong (<25 NTU)', warn: 'Hơi đục (25–50 NTU)', high: 'Nước đục cao (>50 NTU)' },
+    tds: { ok: 'Khoáng hồ chình (100–800 ppm)', low: 'Khoáng thấp (<100 ppm)', high: 'Khoáng/TDS cao (>800 ppm)' },
+  },
+};
+
+function waiting() {
+  return { text: 'Chờ lấy mẫu', cls: 'badge-ideal' };
+}
+
+export default function SensorCards({ measurement, pondConfig }) {
+  const th = pondConfig?.thresholds || EEL_FALLBACK.thresholds;
+  const badges = pondConfig?.badges || EEL_FALLBACK.badges;
+
   const temp = measurement?.temperature;
   const ph = measurement?.ph;
   const turb = measurement?.turbidity;
   const tds = measurement?.tds;
 
   const getTempStatus = (val) => {
-    if (val === undefined || val === null) return { text: 'Chờ lấy mẫu', cls: 'badge-ideal' };
-    if (val >= 25 && val <= 29) return { text: 'Lý tưởng (25-29°C)', cls: 'badge-ideal' };
-    if (val < 25) return { text: 'Hơi lạnh (<25°C)', cls: 'badge-warning' };
-    return { text: 'Nóng (>29°C)', cls: 'badge-danger' };
+    if (val === undefined || val === null) return waiting();
+    if (val >= th.temp_min && val <= th.temp_max) return { text: badges.temperature.ok, cls: 'badge-ideal' };
+    if (val < th.temp_min) return { text: badges.temperature.low, cls: 'badge-warning' };
+    return { text: badges.temperature.high, cls: 'badge-danger' };
   };
 
   const getPhStatus = (val) => {
-    if (val === undefined || val === null) return { text: 'Chờ lấy mẫu', cls: 'badge-ideal' };
-    if (val >= 6.8 && val <= 7.8) return { text: 'Chuẩn hồ cá (6.8-7.8)', cls: 'badge-ideal' };
-    if (val < 6.8) return { text: 'Nhiễm Axit (<6.8)', cls: 'badge-danger' };
-    return { text: 'Nhiễm Kiềm (>7.8)', cls: 'badge-warning' };
+    if (val === undefined || val === null) return waiting();
+    if (val >= th.ph_min && val <= th.ph_max) return { text: badges.ph.ok, cls: 'badge-ideal' };
+    if (val < th.ph_min) return { text: badges.ph.low, cls: 'badge-danger' };
+    return { text: badges.ph.high, cls: 'badge-warning' };
   };
 
   const getTurbStatus = (val) => {
-    if (val === undefined || val === null) return { text: 'Chờ lấy mẫu', cls: 'badge-ideal' };
-    if (val < 15) return { text: 'Nước rất trong (<15 NTU)', cls: 'badge-ideal' };
-    if (val <= 25) return { text: 'Hơi đục (15-25 NTU)', cls: 'badge-warning' };
-    return { text: 'Nước đục cao (>25 NTU)', cls: 'badge-danger' };
+    if (val === undefined || val === null) return waiting();
+    if (val < th.turbidity_warn) return { text: badges.turbidity.ok, cls: 'badge-ideal' };
+    if (val <= th.turbidity_max) return { text: badges.turbidity.warn || badges.turbidity.high, cls: 'badge-warning' };
+    return { text: badges.turbidity.high, cls: 'badge-danger' };
   };
 
   const getTdsStatus = (val) => {
-    if (val === undefined || val === null) return { text: 'Chờ lấy mẫu', cls: 'badge-ideal' };
-    if (val >= 120 && val <= 260) return { text: 'Nước ngọt chuẩn (120-260 ppm)', cls: 'badge-ideal' };
-    if (val < 120) return { text: 'Khoáng thấp (<120 ppm)', cls: 'badge-warning' };
-    return { text: 'Chất rắn cao (>260 ppm)', cls: 'badge-danger' };
-  };
-
-  const formatRaw = (adc, voltage) => {
-    if (adc == null && voltage == null) return null;
-    const parts = [];
-    if (adc != null) parts.push(`ADC ${adc}`);
-    if (voltage != null) parts.push(`${Number(voltage).toFixed(3)} V`);
-    return parts.join(' · ');
+    if (val === undefined || val === null) return waiting();
+    if (val >= th.tds_min && val <= th.tds_max) return { text: badges.tds.ok, cls: 'badge-ideal' };
+    if (val < th.tds_min) return { text: badges.tds.low, cls: 'badge-warning' };
+    return { text: badges.tds.high, cls: 'badge-danger' };
   };
 
   const cards = [
@@ -47,7 +61,6 @@ export default function SensorCards({ measurement }) {
       title: 'Nhiệt Độ Nước',
       value: temp !== undefined && temp !== null ? temp.toFixed(1) : '--',
       unit: '°C',
-      raw: null,
       status: getTempStatus(temp),
       iconBg: 'rgba(239, 68, 68, 0.15)',
       iconColor: '#f87171',
@@ -62,7 +75,6 @@ export default function SensorCards({ measurement }) {
       title: 'Độ pH Môi Trường',
       value: ph !== undefined && ph !== null ? ph.toFixed(2) : '--',
       unit: 'pH',
-      raw: formatRaw(measurement?.ph_adc, measurement?.ph_voltage),
       status: getPhStatus(ph),
       iconBg: 'rgba(16, 185, 129, 0.15)',
       iconColor: '#34d399',
@@ -77,7 +89,6 @@ export default function SensorCards({ measurement }) {
       title: 'Độ Đục Của Nước',
       value: turb !== undefined && turb !== null ? turb.toFixed(1) : '--',
       unit: 'NTU',
-      raw: formatRaw(measurement?.turbidity_adc, measurement?.turbidity_voltage),
       status: getTurbStatus(turb),
       iconBg: 'rgba(56, 189, 248, 0.15)',
       iconColor: '#38bdf8',
@@ -92,7 +103,6 @@ export default function SensorCards({ measurement }) {
       title: 'Chất Rắn Hòa Tan (TDS)',
       value: tds !== undefined && tds !== null ? Math.round(tds) : '--',
       unit: 'ppm',
-      raw: formatRaw(measurement?.tds_adc, measurement?.tds_voltage),
       status: getTdsStatus(tds),
       iconBg: 'rgba(129, 140, 248, 0.15)',
       iconColor: '#818cf8',
@@ -119,11 +129,6 @@ export default function SensorCards({ measurement }) {
             <div className="sensor-value">{c.value}</div>
             <div className="sensor-unit">{c.unit}</div>
           </div>
-          {c.raw && (
-            <div style={{ fontSize: '11px', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)', marginTop: '4px' }}>
-              raw: {c.raw}
-            </div>
-          )}
           <div className={`sensor-badge ${c.status.cls}`}>{c.status.text}</div>
         </div>
       ))}

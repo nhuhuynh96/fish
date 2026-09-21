@@ -94,6 +94,28 @@ func initSchema(db *sql.DB) error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_events_device_created ON sampling_events (device_id, created_at DESC);
+
+	CREATE TABLE IF NOT EXISTS pond_config (
+		id VARCHAR(32) PRIMARY KEY,
+		species VARCHAR(64) NOT NULL DEFAULT 'ca_chinh',
+		volume_l DOUBLE PRECISION NOT NULL DEFAULT 9000,
+		has_filter BOOLEAN NOT NULL DEFAULT false,
+		temp_min DOUBLE PRECISION NOT NULL DEFAULT 26,
+		temp_max DOUBLE PRECISION NOT NULL DEFAULT 32,
+		ph_min DOUBLE PRECISION NOT NULL DEFAULT 7.0,
+		ph_max DOUBLE PRECISION NOT NULL DEFAULT 8.5,
+		turbidity_warn DOUBLE PRECISION NOT NULL DEFAULT 25,
+		turbidity_max DOUBLE PRECISION NOT NULL DEFAULT 50,
+		tds_min DOUBLE PRECISION NOT NULL DEFAULT 100,
+		tds_max DOUBLE PRECISION NOT NULL DEFAULT 800,
+		updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+	);
+
+	INSERT INTO pond_config (id, species, volume_l, has_filter,
+		temp_min, temp_max, ph_min, ph_max,
+		turbidity_warn, turbidity_max, tds_min, tds_max)
+	VALUES ('default', 'ca_chinh', 9000, false, 26, 32, 7.0, 8.5, 25, 50, 100, 800)
+	ON CONFLICT (id) DO NOTHING;
 	`
 	_, err := db.Exec(query)
 	if err != nil {

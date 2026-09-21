@@ -1,12 +1,16 @@
 package handler
 
 import (
+	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
 	"github.com/nhuhuynh/iot-fish/internal/infrastructure/scheduler"
 	"github.com/nhuhuynh/iot-fish/internal/interface/http/respond"
+	"github.com/nhuhuynh/iot-fish/internal/pkg/advice"
 	fishuc "github.com/nhuhuynh/iot-fish/internal/usecase/fish"
 )
 
@@ -351,7 +355,38 @@ func (h *FishHandler) UpdateCalibration(c *gin.Context) {
 	})
 }
 
-// 8. Lấy danh sách thiết bị
+// 8. Phân tích xu hướng và đề xuất xử lý hồ
+func (h *FishHandler) GetAdvice(c *gin.Context) {
+	deviceID := c.Param("id")
+	if deviceID == "" {
+		respond.BadRequest(c, "missing device id")
+		return
+	}
+
+	var req struct {
+		VolumeL   float64 `json:"volume_l"`
+		Species   string  `json:"species"`
+		HasFilter *bool   `json:"has_filter"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	res, err := h.svc.GetAdvice(c.Request.Context(), deviceID, advice.Profile{
+		VolumeL:   req.VolumeL,
+		Species:   req.Species,
+		HasFilter: req.HasFilter,
+	})
+	if err != nil {
+		if errors.Is(err, advice.ErrLLMNotConfigured) || errors.Is(err, advice.ErrLLMUnavailable) {
+			respond.Error(c, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		respond.InternalError(c, err.Error())
+		return
+	}
+	respond.OK(c, res)
+}
+
+// 9. Lấy danh sách thiết bị
 func (h *FishHandler) ListDevices(c *gin.Context) {
 	list, err := h.svc.ListDevices(c.Request.Context())
 	if err != nil {
@@ -359,4 +394,27 @@ func (h *FishHandler) ListDevices(c *gin.Context) {
 		return
 	}
 	respond.OK(c, list)
+}
+
+func (h *FishHandler) GetPondConfig(c *gin.Context) {
+	cfg, err := h.svc.GetPondConfig(c.Request.Context())
+	if err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+	respond.OK(c, cfg)
+}
+
+func (h *FishHandler) UpdatePondConfig(c *gin.Context) {
+	var req fish.PondConfig
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respond.BadRequest(c, "invalid body")
+		return
+	}
+	cfg, err := h.svc.UpdatePondConfig(c.Request.Context(), &req)
+	if err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+	respond.OK(c, cfg)
 }

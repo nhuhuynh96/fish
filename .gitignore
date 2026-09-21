@@ -7,3 +7,5 @@
 fe/node_modules
 be/build
 be/bin
+.env
+be/.env

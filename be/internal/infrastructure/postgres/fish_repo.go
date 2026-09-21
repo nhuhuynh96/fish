@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
@@ -107,7 +108,32 @@ func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int
 		return nil, fmt.Errorf("query measurements: %w", err)
 	}
 	defer rows.Close()
+	return scanMeasurements(rows)
+}
 
+func (s *Store) ListMeasurementsSince(ctx context.Context, deviceID string, since time.Time, limit int) ([]fish.Measurement, error) {
+	if limit <= 0 {
+		limit = 4000
+	}
+	query := `
+		SELECT id, device_id, timestamp, status, duration_ms, sensors,
+		       temperature, ph, turbidity, tds,
+		       ph_adc, ph_voltage, tds_adc, tds_voltage, turbidity_adc, turbidity_voltage,
+		       created_at
+		FROM measurements
+		WHERE device_id = $1 AND created_at >= $2
+		ORDER BY created_at DESC
+		LIMIT $3
+	`
+	rows, err := s.db.QueryContext(ctx, query, deviceID, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query measurements since: %w", err)
+	}
+	defer rows.Close()
+	return scanMeasurements(rows)
+}
+
+func scanMeasurements(rows *sql.Rows) ([]fish.Measurement, error) {
 	list := make([]fish.Measurement, 0)
 	for rows.Next() {
 		var m fish.Measurement
@@ -123,7 +149,7 @@ func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int
 		m.Sensors = sensors
 		list = append(list, m)
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
 func (s *Store) GetCalibration(ctx context.Context, deviceID string) (*fish.DeviceCalibration, error) {
@@ -275,4 +301,65 @@ func (s *Store) ListDevices(ctx context.Context) ([]fish.Device, error) {
 		list = append(list, d)
 	}
 	return list, nil
+}
+
+func (s *Store) GetPondConfig(ctx context.Context) (*fish.PondConfig, error) {
+	query := `
+		SELECT id, species, volume_l, has_filter,
+		       temp_min, temp_max, ph_min, ph_max,
+		       turbidity_warn, turbidity_max, tds_min, tds_max, updated_at
+		FROM pond_config WHERE id = $1
+	`
+	row := s.db.QueryRowContext(ctx, query, fish.DefaultPondConfigID)
+	var c fish.PondConfig
+	err := row.Scan(
+		&c.ID, &c.Species, &c.VolumeL, &c.HasFilter,
+		&c.Thresholds.TempMin, &c.Thresholds.TempMax, &c.Thresholds.PHMin, &c.Thresholds.PHMax,
+		&c.Thresholds.TurbidityWarn, &c.Thresholds.TurbidityMax, &c.Thresholds.TDSMin, &c.Thresholds.TDSMax,
+		&c.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return fish.DefaultPondConfig(), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query pond_config: %w", err)
+	}
+	return c.Normalize(), nil
+}
+
+func (s *Store) SavePondConfig(ctx context.Context, cfg *fish.PondConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("pond config required")
+	}
+	cfg = cfg.Normalize()
+	query := `
+		INSERT INTO pond_config (
+			id, species, volume_l, has_filter,
+			temp_min, temp_max, ph_min, ph_max,
+			turbidity_warn, turbidity_max, tds_min, tds_max, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		ON CONFLICT (id) DO UPDATE SET
+			species = EXCLUDED.species,
+			volume_l = EXCLUDED.volume_l,
+			has_filter = EXCLUDED.has_filter,
+			temp_min = EXCLUDED.temp_min,
+			temp_max = EXCLUDED.temp_max,
+			ph_min = EXCLUDED.ph_min,
+			ph_max = EXCLUDED.ph_max,
+			turbidity_warn = EXCLUDED.turbidity_warn,
+			turbidity_max = EXCLUDED.turbidity_max,
+			tds_min = EXCLUDED.tds_min,
+			tds_max = EXCLUDED.tds_max,
+			updated_at = EXCLUDED.updated_at
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		cfg.ID, cfg.Species, cfg.VolumeL, cfg.HasFilter,
+		cfg.Thresholds.TempMin, cfg.Thresholds.TempMax, cfg.Thresholds.PHMin, cfg.Thresholds.PHMax,
+		cfg.Thresholds.TurbidityWarn, cfg.Thresholds.TurbidityMax, cfg.Thresholds.TDSMin, cfg.Thresholds.TDSMax,
+		cfg.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert pond_config: %w", err)
+	}
+	return nil
 }

@@ -102,6 +102,36 @@ export const api = {
     if (!res.ok) throw new Error(json.error || 'Update calibration failed');
     return json.data;
   },
+
+  async getAdvice(deviceId, profile) {
+    if (!deviceId) return null;
+    const res = await fetch(`${API_BASE}/devices/${deviceId}/advice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile || {}),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Advice failed');
+    return json.data;
+  },
+
+  async getPondConfig() {
+    const res = await fetch(`${API_BASE}/pond-config`);
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Load pond config failed');
+    return json.data;
+  },
+
+  async updatePondConfig(config) {
+    const res = await fetch(`${API_BASE}/pond-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config || {}),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Update pond config failed');
+    return json.data;
+  },
 };
 
 export function createWebSocket(onMessage, onStatusChange) {

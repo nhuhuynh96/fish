@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
 )
@@ -13,6 +14,7 @@ type Store struct {
 	events       map[string][]fish.SamplingEvent
 	devices      map[string]*fish.Device
 	calibrations map[string]*fish.DeviceCalibration
+	pond         *fish.PondConfig
 }
 
 func NewStore() *Store {
@@ -29,8 +31,8 @@ func (s *Store) SaveMeasurement(ctx context.Context, m *fish.Measurement) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.measurements[m.DeviceID] = append([]fish.Measurement{*m}, s.measurements[m.DeviceID]...)
-	if len(s.measurements[m.DeviceID]) > 100 {
-		s.measurements[m.DeviceID] = s.measurements[m.DeviceID][:100]
+	if len(s.measurements[m.DeviceID]) > 5000 {
+		s.measurements[m.DeviceID] = s.measurements[m.DeviceID][:5000]
 	}
 	return nil
 }
@@ -91,6 +93,28 @@ func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int
 	}
 	res := make([]fish.Measurement, limit)
 	copy(res, list[:limit])
+	return res, nil
+}
+
+func (s *Store) ListMeasurementsSince(ctx context.Context, deviceID string, since time.Time, limit int) ([]fish.Measurement, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list, ok := s.measurements[deviceID]
+	if !ok {
+		return []fish.Measurement{}, nil
+	}
+	filtered := make([]fish.Measurement, 0, len(list))
+	for _, m := range list {
+		if m.CreatedAt.Before(since) {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	if limit <= 0 || limit > len(filtered) {
+		limit = len(filtered)
+	}
+	res := make([]fish.Measurement, limit)
+	copy(res, filtered[:limit])
 	return res, nil
 }
 
@@ -166,5 +190,26 @@ func (s *Store) SaveCalibration(ctx context.Context, cal *fish.DeviceCalibration
 	defer s.mu.Unlock()
 	cp := *cal
 	s.calibrations[cal.DeviceID] = &cp
+	return nil
+}
+
+func (s *Store) GetPondConfig(ctx context.Context) (*fish.PondConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.pond == nil {
+		return fish.DefaultPondConfig(), nil
+	}
+	cp := *s.pond
+	return cp.Normalize(), nil
+}
+
+func (s *Store) SavePondConfig(ctx context.Context, cfg *fish.PondConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cfg == nil {
+		return nil
+	}
+	cp := *cfg.Normalize()
+	s.pond = &cp
 	return nil
 }

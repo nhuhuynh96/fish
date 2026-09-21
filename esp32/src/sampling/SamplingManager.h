@@ -24,7 +24,9 @@ enum SamplingState {
 enum CommandType {
     CMD_MEASURE,
     CMD_PUMP,
-    CMD_STATUS
+    CMD_STATUS,
+    CMD_FILL,
+    CMD_DRAIN
 };
 
 struct PendingCommand {
@@ -94,9 +96,10 @@ private:
     unsigned long manualDrainSince = 0;
 
     const unsigned long STABILIZE_TIME = 500;
-    const unsigned long MAX_FILL_TIME = 60000;   // giữ cho tương thích (measure không còn dùng)
+    const unsigned long MAX_FILL_TIME = 60000;   // nạp nước: phao đầy hoặc tối đa 60s
     const unsigned long MAX_DRAIN_TIME = 60000;
-    const unsigned long FLOAT_DEBOUNCE_TIME = 300;
+    const unsigned long FLOAT_DEBOUNCE_TIME = 800;   // tiếp điểm phải giữ ổn định mới tin
+    const unsigned long PUMP_FLOAT_GRACE_MS = 1000;  // bỏ qua phao 1s sau khi bật relay (nhiễu)
     const unsigned long MAX_MANUAL_PUMP_TIME = 60000; // bơm/van thủ công: phao hoặc 60s
     static const uint8_t MAX_FILL_FAILS = 3;
 
@@ -145,6 +148,9 @@ private:
 
     bool isWaterFull() const;
     bool isWaterEmpty() const;
+    bool isInletOn() const;
+    bool isDrainOn() const;
+    void logFloatPins(const char *why) const;
     void setInletPump(bool enabled);
     void setDrainValve(bool enabled);
     void setSensorPower(SensorType type, bool enabled);

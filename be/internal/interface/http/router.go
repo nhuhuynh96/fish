@@ -51,7 +51,10 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 			devices.POST("/:id/auto", fishHandler.ToggleAuto)
 			devices.GET("/:id/calibration", fishHandler.GetCalibration)
 			devices.PUT("/:id/calibration", fishHandler.UpdateCalibration)
+			devices.POST("/:id/advice", fishHandler.GetAdvice)
 		}
+		api.GET("/pond-config", fishHandler.GetPondConfig)
+		api.PUT("/pond-config", fishHandler.UpdatePondConfig)
 	}
 
 	return r

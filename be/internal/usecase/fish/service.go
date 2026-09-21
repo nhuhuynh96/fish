@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
+	"github.com/nhuhuynh/iot-fish/internal/pkg/advice"
 	"github.com/nhuhuynh/iot-fish/internal/pkg/calibrate"
 )
 
@@ -25,6 +26,8 @@ type Service struct {
 	pub       fish.CommandPublisher
 	hub       fish.EventHub
 	sched     ScheduleRegistrar
+	narrator  advice.Narrator
+	pondRepo  fish.PondConfigRepository
 }
 
 func NewService(
@@ -35,7 +38,7 @@ func NewService(
 	pub fish.CommandPublisher,
 	hub fish.EventHub,
 ) *Service {
-	return &Service{
+	s := &Service{
 		repo:      repo,
 		eventRepo: eventRepo,
 		devRepo:   devRepo,
@@ -43,10 +46,20 @@ func NewService(
 		pub:       pub,
 		hub:       hub,
 	}
+	if p, ok := calRepo.(fish.PondConfigRepository); ok {
+		s.pondRepo = p
+	} else if p, ok := repo.(fish.PondConfigRepository); ok {
+		s.pondRepo = p
+	}
+	return s
 }
 
 func (s *Service) SetScheduleRegistrar(sched ScheduleRegistrar) {
 	s.sched = sched
+}
+
+func (s *Service) SetNarrator(n advice.Narrator) {
+	s.narrator = n
 }
 
 // 1. Kích hoạt đo lường từ Backend
@@ -221,10 +234,14 @@ func (s *Service) UpdateCalibration(ctx context.Context, cal *fish.DeviceCalibra
 // 4. Xử lý nhận sự kiện tiến trình (Event Stream) từ MQTT
 func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []byte) error {
 	var body struct {
-		DeviceID string `json:"device_id"`
-		Stage    string `json:"stage"`
-		State    string `json:"state"`
-		Message  string `json:"message"`
+		DeviceID   string `json:"device_id"`
+		Stage      string `json:"stage"`
+		State      string `json:"state"`
+		Message    string `json:"message"`
+		InletOn    *bool  `json:"inlet_on"`
+		DrainOn    *bool  `json:"drain_on"`
+		FloatFull  *bool  `json:"float_full"`
+		FloatEmpty *bool  `json:"float_empty"`
 	}
 
 	if err := json.Unmarshal(payload, &body); err != nil {
@@ -236,12 +253,16 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 	}
 
 	e := &fish.SamplingEvent{
-		ID:        uuid.New().String(),
-		DeviceID:  body.DeviceID,
-		Stage:     body.Stage,
-		State:     body.State,
-		Message:   body.Message,
-		CreatedAt: time.Now(),
+		ID:         uuid.New().String(),
+		DeviceID:   body.DeviceID,
+		Stage:      body.Stage,
+		State:      body.State,
+		Message:    body.Message,
+		InletOn:    body.InletOn,
+		DrainOn:    body.DrainOn,
+		FloatFull:  body.FloatFull,
+		FloatEmpty: body.FloatEmpty,
+		CreatedAt:  time.Now(),
 	}
 
 	if err := s.eventRepo.SaveEvent(ctx, e); err != nil {
@@ -385,6 +406,108 @@ func (s *Service) GetLatest(ctx context.Context, deviceID string) (*fish.Measure
 
 func (s *Service) ListHistory(ctx context.Context, deviceID string, limit int) ([]fish.Measurement, error) {
 	return s.repo.ListMeasurements(ctx, deviceID, limit)
+}
+
+func (s *Service) GetAdvice(ctx context.Context, deviceID string, profile advice.Profile) (*advice.Result, error) {
+	if s.narrator == nil {
+		return nil, advice.ErrLLMNotConfigured
+	}
+	since := time.Now().Add(-7 * 24 * time.Hour)
+	history, err := s.repo.ListMeasurementsSince(ctx, deviceID, since, 4000)
+	if err != nil {
+		return nil, err
+	}
+	cfg := s.loadPondConfig(ctx)
+	merged := advice.Profile{
+		VolumeL:   cfg.VolumeL,
+		Species:   cfg.Species,
+		HasFilter: &cfg.HasFilter,
+	}
+	if profile.VolumeL > 0 {
+		merged.VolumeL = profile.VolumeL
+	}
+	if strings.TrimSpace(profile.Species) != "" {
+		merged.Species = profile.Species
+	}
+	if profile.HasFilter != nil {
+		merged.HasFilter = profile.HasFilter
+	}
+	th := toAdviceThresholds(cfg.Thresholds)
+	res := advice.AnalyzeWith(history, merged, &th)
+	if err := advice.Enrich(ctx, res, s.narrator); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (s *Service) GetPondConfig(ctx context.Context) (*fish.PondConfig, error) {
+	return s.loadPondConfig(ctx), nil
+}
+
+func (s *Service) UpdatePondConfig(ctx context.Context, patch *fish.PondConfig) (*fish.PondConfig, error) {
+	if s.pondRepo == nil {
+		return nil, fmt.Errorf("pond config storage not configured")
+	}
+	cur := s.loadPondConfig(ctx)
+	if patch == nil {
+		return cur, nil
+	}
+	speciesChanged := false
+	if sp := strings.ToLower(strings.TrimSpace(patch.Species)); sp != "" && sp != cur.Species {
+		cur.Species = sp
+		speciesChanged = true
+	}
+	if patch.VolumeL > 0 {
+		cur.VolumeL = patch.VolumeL
+	}
+	if patch.VolumeM3 > 0 {
+		cur.VolumeL = patch.VolumeM3 * 1000
+	}
+	cur.HasFilter = patch.HasFilter
+	if speciesChanged && patch.Thresholds == (fish.WaterThresholds{}) {
+		cur.Thresholds = fromAdviceThresholds(advice.ThresholdsFor(cur.Species))
+	}
+	if patch.Thresholds != (fish.WaterThresholds{}) {
+		cur.Thresholds = patch.Thresholds
+	}
+	cur.UpdatedAt = time.Now()
+	cur = cur.Normalize()
+	if err := s.pondRepo.SavePondConfig(ctx, cur); err != nil {
+		return nil, err
+	}
+	if s.hub != nil {
+		s.hub.Broadcast("pond_config_updated", cur)
+	}
+	return cur, nil
+}
+
+func (s *Service) loadPondConfig(ctx context.Context) *fish.PondConfig {
+	if s.pondRepo == nil {
+		return fish.DefaultPondConfig()
+	}
+	c, err := s.pondRepo.GetPondConfig(ctx)
+	if err != nil || c == nil {
+		return fish.DefaultPondConfig()
+	}
+	return c.Normalize()
+}
+
+func toAdviceThresholds(t fish.WaterThresholds) advice.Thresholds {
+	return advice.Thresholds{
+		TempMin: t.TempMin, TempMax: t.TempMax,
+		PHMin: t.PHMin, PHMax: t.PHMax,
+		TurbidityWarn: t.TurbidityWarn, TurbidityMax: t.TurbidityMax,
+		TDSMin: t.TDSMin, TDSMax: t.TDSMax,
+	}
+}
+
+func fromAdviceThresholds(t advice.Thresholds) fish.WaterThresholds {
+	return fish.WaterThresholds{
+		TempMin: t.TempMin, TempMax: t.TempMax,
+		PHMin: t.PHMin, PHMax: t.PHMax,
+		TurbidityWarn: t.TurbidityWarn, TurbidityMax: t.TurbidityMax,
+		TDSMin: t.TDSMin, TDSMax: t.TDSMax,
+	}
 }
 
 func (s *Service) ListEvents(ctx context.Context, deviceID string, limit int) ([]fish.SamplingEvent, error) {

@@ -2,18 +2,16 @@ import React from 'react';
 
 export default function LiveSamplingTimeline({ currentState, latestEvent }) {
   const steps = [
-    { key: 'STABILIZING', label: '1. Chuẩn Bị', desc: 'Sẵn sàng đọc cảm biến' },
-    { key: 'MEASURING', label: '2. Đo Cảm Biến', desc: 'Đọc ADC / voltage từng sensor' },
-    { key: 'PUBLISHING', label: '3. Gửi MQTT', desc: 'Publish sensor_data lên backend' },
+    { key: 'FILLING_WATER', label: '1. Bơm Nạp', desc: 'Đầu queue: bơm đến phao đầy' },
+    { key: 'STABILIZING', label: '2. Đo Cảm Biến', desc: 'Đọc ADC từng sensor' },
+    { key: 'DRAINING_WATER', label: '3. Xả Nước', desc: 'Cuối queue: xả đến phao cạn' },
   ];
 
   const getStepStatus = (stepKey, index) => {
     if (!currentState || currentState === 'IDLE') return '';
-    // FILLING/DRAINING cũ không còn trong chu trình measure
-    const stateOrder = ['STABILIZING', 'MEASURING', 'PUBLISHING'];
+    const stateOrder = ['FILLING_WATER', 'STABILIZING', 'DRAINING_WATER'];
     let mapped = currentState;
-    if (currentState === 'FILLING_WATER') mapped = 'STABILIZING';
-    if (currentState === 'DRAINING_WATER') mapped = 'PUBLISHING';
+    if (currentState === 'MEASURING' || currentState === 'PUBLISHING') mapped = 'STABILIZING';
     const currentIndex = stateOrder.indexOf(mapped);
 
     if (currentIndex === -1) return '';
@@ -31,7 +29,7 @@ export default function LiveSamplingTimeline({ currentState, latestEvent }) {
         Tiến Trình Đo Cảm Biến
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-        Measure không bơm/xả. Bơm nạp / van xả điều khiển bằng lệnh pump riêng.
+        Measure xếp queue: bơm nạp (đầu) → đo cảm biến → xả (cuối). Phao đầy/cạn hoặc tối đa 60s.
       </p>
 
       <div className="timeline-stepper">

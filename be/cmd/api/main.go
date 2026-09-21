@@ -11,6 +11,7 @@ import (
 
 	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
 	"github.com/nhuhuynh/iot-fish/internal/infrastructure/events"
+	"github.com/nhuhuynh/iot-fish/internal/infrastructure/llm"
 	"github.com/nhuhuynh/iot-fish/internal/infrastructure/memory"
 	inframqtt "github.com/nhuhuynh/iot-fish/internal/infrastructure/mqtt"
 	"github.com/nhuhuynh/iot-fish/internal/infrastructure/postgres"
@@ -72,6 +73,13 @@ func main() {
 
 	// 4. Khởi tạo Core Service (Usecase Layer)
 	fishSvc := fishuc.NewService(measRepo, eventRepo, devRepo, calRepo, pub, hub)
+
+	if n := llm.New(cfg.OpenAIAPIKey, cfg.OpenAIBaseURL, cfg.OpenAIModel); n != nil {
+		fishSvc.SetNarrator(n)
+		log.Printf("[Advice] LLM diễn giải bật (model=%s)", cfg.OpenAIModel)
+	} else {
+		log.Println("[Advice] LLM tắt — chỉ dùng rule + xu hướng (thiếu OPENAI_API_KEY)")
+	}
 
 	sched := scheduler.NewScheduler(fishSvc)
 	sched.Start()

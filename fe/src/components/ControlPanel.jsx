@@ -1,9 +1,14 @@
 import React, { useState } from 'react';
 
-export default function ControlPanel({ onMeasure, onPump, onClearQueue, isMeasuring }) {
+export default function ControlPanel({
+  onMeasure,
+  onPump,
+  onClearQueue,
+  isMeasuring,
+  inletOn = false,
+  drainOn = false,
+}) {
   const [selectedSensors, setSelectedSensors] = useState(['temp', 'ph']);
-  const [inletState, setInletState] = useState(false);
-  const [drainState, setDrainState] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const availableSensors = [
@@ -37,15 +42,11 @@ export default function ControlPanel({ onMeasure, onPump, onClearQueue, isMeasur
   };
 
   const toggleInlet = async () => {
-    const next = !inletState;
-    setInletState(next);
-    await onPump('inlet', next);
+    await onPump('inlet', !inletOn);
   };
 
   const toggleDrain = async () => {
-    const next = !drainState;
-    setDrainState(next);
-    await onPump('drain', next);
+    await onPump('drain', !drainOn);
   };
 
   const handleClearQueue = async () => {
@@ -130,7 +131,7 @@ export default function ControlPanel({ onMeasure, onPump, onClearQueue, isMeasur
           marginBottom: '20px',
         }}
       >
-        💡 <b>Đo độc lập:</b> Lệnh measure chỉ đọc cảm biến. Bơm nạp / xả do bạn gửi lệnh pump riêng (tự tắt khi phao đầy/cạn hoặc sau 60s).
+        💡 <b>Chu trình đo:</b> mỗi lệnh đo xếp queue <b>bơm nạp → đo cảm biến → xả</b> (phao đầy/cạn hoặc tối đa 60s). Lịch auto cũng vậy. Bơm/xả thủ công bên dưới vẫn gửi lệnh riêng.
       </div>
 
       {/* Action 3: Manual Pump Controls */}
@@ -140,18 +141,18 @@ export default function ControlPanel({ onMeasure, onPump, onClearQueue, isMeasur
         </div>
         <div className="btn-group" style={{ margin: 0 }}>
           <button
-            className={`btn ${inletState ? 'btn-primary' : 'btn-secondary'}`}
+            className={`btn ${inletOn ? 'btn-primary' : 'btn-secondary'}`}
             style={{ flex: 1, justifyContent: 'center' }}
             onClick={toggleInlet}
           >
-            🚰 Bơm Nạp: {inletState ? 'BẬT' : 'TẮT'}
+            🚰 Bơm Nạp: {inletOn ? 'BẬT' : 'TẮT'}
           </button>
           <button
-            className={`btn ${drainState ? 'btn-primary' : 'btn-secondary'}`}
+            className={`btn ${drainOn ? 'btn-primary' : 'btn-secondary'}`}
             style={{ flex: 1, justifyContent: 'center' }}
             onClick={toggleDrain}
           >
-            💨 Bơm Xả: {drainState ? 'BẬT' : 'TẮT'}
+            💨 Bơm Xả: {drainOn ? 'BẬT' : 'TẮT'}
           </button>
         </div>
       </div>

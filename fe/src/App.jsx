@@ -3,13 +3,17 @@ import { api, createWebSocket } from './services/api';
 import Header from './components/Header';
 import NavMenu from './components/NavMenu';
 import SensorCards from './components/SensorCards';
+import AdvicePanel from './components/AdvicePanel';
 import LiveSamplingTimeline from './components/LiveSamplingTimeline';
 import SchedulePanel from './components/SchedulePanel';
 import ControlPanel from './components/ControlPanel';
 import EventLogStream from './components/EventLogStream';
 import HistoryTable from './components/HistoryTable';
+import SensorTrendChart from './components/SensorTrendChart';
 import CalibrationPanel from './components/CalibrationPanel';
 import DeviceLogStream from './components/DeviceLogStream';
+
+const HISTORY_LIMIT = 100;
 
 function mergeMeasurement(prev, incoming) {
   if (!prev) return incoming;
@@ -27,6 +31,44 @@ function mergeMeasurement(prev, incoming) {
   return merged;
 }
 
+function applyPumpFromEvent(payload, setInletOn, setDrainOn) {
+  if (typeof payload.inlet_on === 'boolean') {
+    setInletOn(payload.inlet_on);
+  } else {
+    const stage = payload.stage || '';
+    const msg = payload.message || '';
+    if (stage === 'filling' || msg.includes('Bơm nạp nước: BẬT')) setInletOn(true);
+    if (
+      stage === 'filled' ||
+      stage === 'queue_cleared' ||
+      msg.includes('tự tắt bơm nạp') ||
+      msg.includes('Bơm nạp nước: TẮT') ||
+      msg.includes('Không bật bơm') ||
+      (stage === 'manual_pump_timeout' && msg.includes('Bơm nạp'))
+    ) {
+      setInletOn(false);
+    }
+  }
+
+  if (typeof payload.drain_on === 'boolean') {
+    setDrainOn(payload.drain_on);
+  } else {
+    const stage = payload.stage || '';
+    const msg = payload.message || '';
+    if (stage === 'draining' || msg.includes('Van xả nước: BẬT')) setDrainOn(true);
+    if (
+      stage === 'drained' ||
+      stage === 'queue_cleared' ||
+      msg.includes('tự tắt van xả') ||
+      msg.includes('Van xả nước: TẮT') ||
+      msg.includes('Không mở van xả') ||
+      (stage === 'manual_pump_timeout' && msg.includes('van xả'))
+    ) {
+      setDrainOn(false);
+    }
+  }
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [devices, setDevices] = useState([]);
@@ -38,6 +80,9 @@ export default function App() {
   const [deviceLogs, setDeviceLogs] = useState([]);
   const [currentState, setCurrentState] = useState('IDLE');
   const [deviceStatus, setDeviceStatus] = useState({ online: true });
+  const [pondConfig, setPondConfig] = useState(null);
+  const [inletOn, setInletOn] = useState(false);
+  const [drainOn, setDrainOn] = useState(false);
 
   const loadData = useCallback(async (devId) => {
     try {
@@ -56,11 +101,18 @@ export default function App() {
       const latest = await api.getLatest(activeId);
       if (latest) setLatestMeasurement(latest);
 
-      const hist = await api.getHistory(activeId, 15);
+      const hist = await api.getHistory(activeId, HISTORY_LIMIT);
       setHistory(hist);
 
       const evts = await api.getEvents(activeId, 25);
       setEvents(evts);
+
+      try {
+        const pond = await api.getPondConfig();
+        if (pond) setPondConfig(pond);
+      } catch (e) {
+        console.error('Load pond config error:', e);
+      }
     } catch (e) {
       console.error('Load data error:', e);
     }
@@ -69,6 +121,8 @@ export default function App() {
   useEffect(() => {
     loadData(selectedDevice);
     setDeviceLogs([]);
+    setInletOn(false);
+    setDrainOn(false);
   }, [selectedDevice, loadData]);
 
   useEffect(() => {
@@ -79,7 +133,7 @@ export default function App() {
         if (type === 'sensor_data') {
           if (payload.device_id === selectedDevice) {
             setLatestMeasurement((prev) => mergeMeasurement(prev, payload));
-            setHistory((prev) => [payload, ...prev.slice(0, 19)]);
+            setHistory((prev) => [payload, ...prev.slice(0, HISTORY_LIMIT - 1)]);
             setCurrentState('IDLE');
           }
         } else if (type === 'sampling_event') {
@@ -88,6 +142,7 @@ export default function App() {
             if (payload.state) {
               setCurrentState(payload.state);
             }
+            applyPumpFromEvent(payload, setInletOn, setDrainOn);
           }
         } else if (type === 'device_status') {
           setDevices((prev) => {
@@ -101,6 +156,8 @@ export default function App() {
               setCurrentState(payload.state);
             }
           }
+        } else if (type === 'pond_config_updated') {
+          setPondConfig(payload);
         } else if (type === 'device_log') {
           if (payload.device_id === selectedDevice) {
             setDeviceLogs((prev) => [...prev.slice(-199), payload]);
@@ -123,14 +180,20 @@ export default function App() {
   };
 
   const handlePump = async (target, state) => {
+    if (target === 'inlet') setInletOn(state);
+    if (target === 'drain') setDrainOn(state);
     try {
       await api.setPump(selectedDevice, target, state);
     } catch (e) {
+      if (target === 'inlet') setInletOn(!state);
+      if (target === 'drain') setDrainOn(!state);
       console.error('Pump error:', e);
     }
   };
 
   const handleClearQueue = async () => {
+    setInletOn(false);
+    setDrainOn(false);
     try {
       await api.clearQueue(selectedDevice);
     } catch (e) {
@@ -172,7 +235,16 @@ export default function App() {
 
       {activeTab === 'dashboard' && (
         <section className="page-section">
-          <SensorCards measurement={latestMeasurement} />
+          <SensorCards measurement={latestMeasurement} pondConfig={pondConfig} />
+
+          <AdvicePanel
+            deviceId={selectedDevice}
+            onPump={handlePump}
+            pondConfig={pondConfig}
+            onPondConfigChange={setPondConfig}
+          />
+
+          <SensorTrendChart history={history} />
 
           <LiveSamplingTimeline
             currentState={currentState}
@@ -185,6 +257,8 @@ export default function App() {
               onPump={handlePump}
               onClearQueue={handleClearQueue}
               isMeasuring={currentState !== 'IDLE'}
+              inletOn={inletOn}
+              drainOn={drainOn}
             />
             <EventLogStream events={events} />
           </div>
@@ -214,6 +288,7 @@ export default function App() {
 
       {activeTab === 'history' && (
         <section className="page-section">
+          <SensorTrendChart history={history} />
           <HistoryTable history={history} />
         </section>
       )}
