@@ -728,6 +728,21 @@ tr:hover td {
   margin-top: 3px;
 }
 
+.advice-kit {
+  margin: -4px 0 16px;
+  padding: 12px 14px;
+  border: 1px dashed var(--card-border);
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.advice-kit-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-bottom: 4px;
+}
+
 .advice-field-hint {
   display: block;
   font-size: 11px;

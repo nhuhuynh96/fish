@@ -2,6 +2,7 @@ import React from 'react';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
+  { id: 'kit', label: 'Test Kit' },
   { id: 'schedule', label: 'Lịch Đo Tự Động' },
   { id: 'calibration', label: 'Hiệu Chuẩn' },
   { id: 'history', label: 'Lịch Sử' },

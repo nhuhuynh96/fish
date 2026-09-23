@@ -9,6 +9,7 @@ export default function ControlPanel({
   drainOn = false,
 }) {
   const [selectedSensors, setSelectedSensors] = useState(['temp', 'ph']);
+  const [inletLevel, setInletLevel] = useState(2);
   const [loading, setLoading] = useState(false);
 
   const availableSensors = [
@@ -30,7 +31,7 @@ export default function ControlPanel({
 
   const handleMeasureAll = async () => {
     setLoading(true);
-    await onMeasure(['all']);
+    await onMeasure(['ph', 'turbidity', 'tds']);
     setLoading(false);
   };
 
@@ -42,7 +43,7 @@ export default function ControlPanel({
   };
 
   const toggleInlet = async () => {
-    await onPump('inlet', !inletOn);
+    await onPump('inlet', !inletOn, inletLevel);
   };
 
   const toggleDrain = async () => {
@@ -131,13 +132,29 @@ export default function ControlPanel({
           marginBottom: '20px',
         }}
       >
-        💡 <b>Chu trình đo (ESP xếp queue):</b> FILL mức 1 (phao GPIO17) → đo pH/turb → nếu có TDS thì FILL mức 2 (phao GPIO4) → đo TDS → DRAIN 30s.
+        💡 MQTT <code>{'{"action":"inlet_on"|"inlet_off"|"drain_on"|"drain_off","level":1|2}'}</code>. Bơm nạp chọn phao 1 hoặc 2. Đo: ph/turb/tds.
       </div>
 
       {/* Action 3: Manual Pump Controls */}
       <div>
         <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px' }}>
-          Điều Khiển Bơm / Xả Thủ Công (xếp vào queue ESP):
+          Điều khiển bơm / xả (MQTT queue):
+        </div>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+          <button
+            type="button"
+            className={`toggle-pill ${inletLevel === 1 ? 'selected' : ''}`}
+            onClick={() => setInletLevel(1)}
+          >
+            Phao 1
+          </button>
+          <button
+            type="button"
+            className={`toggle-pill ${inletLevel === 2 ? 'selected' : ''}`}
+            onClick={() => setInletLevel(2)}
+          >
+            Phao 2
+          </button>
         </div>
         <div className="btn-group" style={{ margin: 0 }}>
           <button

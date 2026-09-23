@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
-#include <vector>
 #include "config/ConfigManager.h"
 #include "portal/WebPortal.h"
 #include "mqtt/MQTTHandler.h"
@@ -27,135 +26,68 @@ static void publishCommandError(const String &message) {
     }
 }
 
-static bool parsePumpState(JsonVariantConst stateVar, bool &outState) {
-    if (stateVar.is<bool>()) {
-        outState = stateVar.as<bool>();
-        return true;
-    }
-
-    if (stateVar.is<int>() || stateVar.is<long>() || stateVar.is<float>()) {
-        outState = stateVar.as<int>() != 0;
-        return true;
-    }
-
-    if (stateVar.is<const char*>()) {
-        String s = stateVar.as<const char*>();
-        s.toLowerCase();
-        s.trim();
-        if (s == "on" || s == "1" || s == "true" || s == "bat") {
-            outState = true;
-            return true;
+static FillLevel parseCommandLevel(JsonDocument &doc) {
+    if (!doc["level"].isNull()) {
+        if (doc["level"].is<const char *>()) {
+            String s = doc["level"].as<const char *>();
+            s.toLowerCase();
+            s.trim();
+            if (s == "high" || s == "hight" || s == "cao" || s == "2") {
+                return FILL_LEVEL_HIGH;
+            }
+            return FILL_LEVEL_LOW;
         }
-        if (s == "off" || s == "0" || s == "false" || s == "tat" || s == "of") {
-            outState = false;
-            return true;
-        }
+        int n = doc["level"].as<int>();
+        return n >= 2 ? FILL_LEVEL_HIGH : FILL_LEVEL_LOW;
     }
-
-    return false;
+    if (!doc["fillLevel"].isNull()) {
+        return doc["fillLevel"].as<int>() >= 1 ? FILL_LEVEL_HIGH : FILL_LEVEL_LOW;
+    }
+    if (!doc["FillLevel"].isNull()) {
+        return doc["FillLevel"].as<int>() >= 1 ? FILL_LEVEL_HIGH : FILL_LEVEL_LOW;
+    }
+    return FILL_LEVEL_LOW;
 }
 
-// {"action":"pump","target":"inlet"|"drain","state":"ON"|"OFF"}
-// {"action":"status"}
-// {"action":"clear_queue"}
+// {"action":"ph"|"turb"|"tds"|"inlet_on"|"inlet_off"|"drain_on"|"drain_off","level":1|2}
 void handleMqttCommand(const String &msg) {
     String payload = msg;
     payload.trim();
-
     LOGF("[Command] Nhận payload: %s\n", payload.c_str());
 
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, payload);
-    if (err) {
-        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"measure\",\"sensors\":[\"tds\"]}");
+    if (deserializeJson(doc, payload)) {
+        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"ph\"} hoặc {\"action\":\"inlet\",\"level\":1}");
         return;
     }
 
-    const char *actionRaw = doc["action"] | "";
-    String action = actionRaw;
+    String action = doc["action"] | "";
     action.toLowerCase();
     action.trim();
-
-    if (action == "measure" || action == "do") {
-        std::vector<String> sensors;
-        JsonVariantConst sensorsVar = doc["sensors"];
-
-        if (sensorsVar.is<JsonArrayConst>()) {
-            for (JsonVariantConst item : sensorsVar.as<JsonArrayConst>()) {
-                if (item.is<const char*>()) {
-                    sensors.push_back(String(item.as<const char*>()));
-                }
-            }
-        } else if (sensorsVar.is<const char*>()) {
-            sensors.push_back(String(sensorsVar.as<const char*>()));
-        }
-
-        if (sensors.empty()) {
-            sensors.push_back("all");
-        }
-
-        samplingManager.enqueueMeasure(sensors);
+    if (action.length() == 0) {
+        publishCommandError("Thiếu action.");
         return;
     }
 
-    // {"action":"fill","level":"low"|"high"} — bơm tới phao mức 1 / mức 2
-    if (action == "fill") {
-        String level = doc["level"] | "low";
-        level.toLowerCase();
-        level.trim();
-        if (level == "high" || level == "cao" || level == "tds" || level == "full" || level == "2" || level == "muc2") {
-            samplingManager.enqueueFill(FILL_LEVEL_HIGH);
-        } else if (level == "low" || level == "thap" || level == "mid" || level == "ph" || level == "1" || level == "muc1") {
-            samplingManager.enqueueFill(FILL_LEVEL_LOW);
-        } else {
-            publishCommandError("fill level phải là \"low\" hoặc \"high\".");
-            return;
-        }
+    if (action == "inlet_off") {
+        samplingManager.hanldeInletOff();
         return;
     }
 
-    // {"action":"drain"} — xả cố định 30s
-    if (action == "drain" || action == "xa") {
-        samplingManager.enqueueDrain();
+    if (action == "drain_off") {
+        samplingManager.hanldeDrainOff();
         return;
     }
 
-    if (action == "pump") {
-        String target = doc["target"] | "";
-        target.toLowerCase();
-        target.trim();
-        if (target != "inlet" && target != "drain") {
-            publishCommandError("pump target phải là \"inlet\" hoặc \"drain\".");
-            return;
-        }
-
-        bool state = false;
-        if (!parsePumpState(doc["state"], state)) {
-            publishCommandError("Thiếu/sai state cho pump. Dùng \"ON\"/\"OFF\" hoặc true/false.");
-            return;
-        }
-
-        samplingManager.enqueuePump(target, state);
-        return;
-    }
-
-    if (action == "status") {
-        samplingManager.enqueueStatus();
-        return;
-    }
-
-    if (action == "clear_queue" || action == "clear" || action == "abort") {
+    if (action == "clear_queue") {
         samplingManager.clearQueue();
         return;
     }
 
-    // schedule / auto_toggle từ backend: nhận nhưng chưa điều khiển phần cứng
-    if (action == "schedule" || action == "auto_toggle") {
-        LOGF("[Command] Nhận action '%s' (chưa triển khai phần cứng).\n", action.c_str());
-        return;
-    }
-
-    publishCommandError("action không hỗ trợ. Dùng measure | fill | drain | pump | status | clear_queue.");
+    PendingCommand cmd;
+    cmd.action = action;
+    cmd.fillLevel = parseCommandLevel(doc);
+    samplingManager.enqueue(cmd);
 }
 
 void setup() {

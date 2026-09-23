@@ -6,21 +6,52 @@ import (
 )
 
 func ThresholdsFor(species string) Thresholds {
+	var t Thresholds
 	switch strings.ToLower(strings.TrimSpace(species)) {
 	case "ca_chinh", "chinh", "eel", "anguilla":
-		// Hồ nuôi cá chình (nước ngọt / hơi lợ): rộng hơn hồ cá cảnh
-		return Thresholds{TempMin: 26, TempMax: 32, PHMin: 7.0, PHMax: 8.5, TurbidityWarn: 25, TurbidityMax: 50, TDSMin: 100, TDSMax: 800}
+		t = Thresholds{TempMin: 26, TempMax: 32, PHMin: 7.0, PHMax: 8.5, TurbidityWarn: 25, TurbidityMax: 50, TDSMin: 100, TDSMax: 800}
 	case "discus", "ca_dia":
-		return Thresholds{TempMin: 28, TempMax: 31, PHMin: 6.0, PHMax: 7.0, TurbidityWarn: 15, TurbidityMax: 25, TDSMin: 50, TDSMax: 150}
+		t = Thresholds{TempMin: 28, TempMax: 31, PHMin: 6.0, PHMax: 7.0, TurbidityWarn: 15, TurbidityMax: 25, TDSMin: 50, TDSMax: 150}
 	case "neon", "ca_neon":
-		return Thresholds{TempMin: 24, TempMax: 27, PHMin: 6.0, PHMax: 7.0, TurbidityWarn: 15, TurbidityMax: 25, TDSMin: 80, TDSMax: 180}
+		t = Thresholds{TempMin: 24, TempMax: 27, PHMin: 6.0, PHMax: 7.0, TurbidityWarn: 15, TurbidityMax: 25, TDSMin: 80, TDSMax: 180}
 	case "koi":
-		return Thresholds{TempMin: 18, TempMax: 28, PHMin: 7.0, PHMax: 8.2, TurbidityWarn: 20, TurbidityMax: 35, TDSMin: 150, TDSMax: 400}
+		t = Thresholds{TempMin: 18, TempMax: 28, PHMin: 7.0, PHMax: 8.2, TurbidityWarn: 20, TurbidityMax: 35, TDSMin: 150, TDSMax: 400}
 	case "ca_vang", "goldfish":
-		return Thresholds{TempMin: 18, TempMax: 24, PHMin: 7.0, PHMax: 8.0, TurbidityWarn: 15, TurbidityMax: 25, TDSMin: 120, TDSMax: 300}
+		t = Thresholds{TempMin: 18, TempMax: 24, PHMin: 7.0, PHMax: 8.0, TurbidityWarn: 15, TurbidityMax: 25, TDSMin: 120, TDSMax: 300}
 	default:
-		return Thresholds{TempMin: 25, TempMax: 29, PHMin: 6.8, PHMax: 7.8, TurbidityWarn: 15, TurbidityMax: 25, TDSMin: 120, TDSMax: 260}
+		t = Thresholds{TempMin: 25, TempMax: 29, PHMin: 6.8, PHMax: 7.8, TurbidityWarn: 15, TurbidityMax: 25, TDSMin: 120, TDSMax: 260}
 	}
+	return withKitDefaults(species, t)
+}
+
+func withKitDefaults(species string, t Thresholds) Thresholds {
+	switch strings.ToLower(strings.TrimSpace(species)) {
+	case "discus", "ca_dia", "neon", "ca_neon":
+		t.DOMin, t.TANWarn, t.TANMax, t.NH3FreeWarn, t.NH3FreeMax = 6, 0.25, 0.5, 0.01, 0.02
+	default:
+		t.DOMin, t.TANWarn, t.TANMax, t.NH3FreeWarn, t.NH3FreeMax = 5, 0.5, 1.5, 0.02, 0.05
+	}
+	return t
+}
+
+func mergeThresholds(base, overlay Thresholds) Thresholds {
+	out := overlay
+	if out.DOMin == 0 {
+		out.DOMin = base.DOMin
+	}
+	if out.TANWarn == 0 {
+		out.TANWarn = base.TANWarn
+	}
+	if out.TANMax == 0 {
+		out.TANMax = base.TANMax
+	}
+	if out.NH3FreeWarn == 0 {
+		out.NH3FreeWarn = base.NH3FreeWarn
+	}
+	if out.NH3FreeMax == 0 {
+		out.NH3FreeMax = base.NH3FreeMax
+	}
+	return out
 }
 
 func pct(v int) *int { return &v }
@@ -37,12 +68,18 @@ func applyRules(res *Result) {
 	tds := trend["tds"]
 	turb := trend["turbidity"]
 	temp := trend["temperature"]
+	do := trend["do"]
+	tan := trend["tan"]
+	nh3 := trend["nh3_free"]
 
 	res.Findings = []Finding{
 		findingFor("temperature", "Nhiệt độ", temp, th.TempMin, th.TempMax, "°C"),
 		findingFor("ph", "pH", ph, th.PHMin, th.PHMax, ""),
 		findingForTurbidity(turb, th.TurbidityWarn, th.TurbidityMax),
 		findingFor("tds", "TDS", tds, th.TDSMin, th.TDSMax, "ppm"),
+		findingFor("do", "Oxy (kit)", do, th.DOMin, 20, "mg/L"),
+		findingForTAN(tan, th.TANWarn, th.TANMax),
+		findingForNH3(nh3, th.NH3FreeWarn, th.NH3FreeMax),
 	}
 
 	overall := "ok"
@@ -64,9 +101,13 @@ func applyRules(res *Result) {
 	res.Overall = overall
 
 	actions := make([]Action, 0, 6)
+	hasKitNH3 := tan.Current != nil || nh3.Current != nil
+	hasKitDO := do.Current != nil
 	doNot := []string{
 		"Không xử lý cả 4 chỉ số cùng lúc — ưu tiên 1 việc rồi đo lại.",
-		"Chưa đo NH3/NO2/NO3: nếu cá nổi đầu, thở gấp thì test kit riêng.",
+	}
+	if !hasKitNH3 {
+		doNot = append(doNot, "Chưa nhập NH3/TAN từ test kit: nếu cá nổi đầu, thở gấp thì đo kit rồi nhập form.")
 	}
 
 	phLow := ph.Current != nil && *ph.Current < th.PHMin
@@ -77,6 +118,11 @@ func applyRules(res *Result) {
 	turbDanger := turb.Current != nil && *turb.Current > th.TurbidityMax
 	tempHigh := temp.Current != nil && *temp.Current > th.TempMax
 	tempLow := temp.Current != nil && *temp.Current < th.TempMin
+	doLow := do.Current != nil && *do.Current < th.DOMin
+	tanHigh := tan.Current != nil && *tan.Current > th.TANWarn
+	tanDanger := tan.Current != nil && *tan.Current > th.TANMax
+	nh3High := nh3.Current != nil && *nh3.Current > th.NH3FreeWarn
+	nh3Danger := nh3.Current != nil && *nh3.Current > th.NH3FreeMax
 
 	worseningWater := (phLow && ph.Slope == "falling") ||
 		(tdsHigh && tds.Slope == "rising") ||
@@ -86,11 +132,19 @@ func applyRules(res *Result) {
 	improvingTDS := tdsHigh && tds.Slope == "falling"
 	improvingTurb := turbHigh && turb.Slope == "falling"
 
-	if tempHigh {
+	if tempHigh || doLow {
+		detail := "Nước nóng làm giảm oxy. Hạ nhiệt từ từ (quạt mặt nước, giảm đèn), tăng sục khí. Không đổ đá trực tiếp vào hồ."
+		title := "Tăng sục khí / hạ nhiệt"
+		if doLow && !tempHigh {
+			title = "Tăng sục khí (oxy thấp)"
+			detail = fmt.Sprintf("DO kit %.1f mg/L dưới ngưỡng %.0f. Tăng sục khí, giảm cho ăn, không tắt máy sục. Đo kit lại sau 2–4 giờ.", *do.Current, th.DOMin)
+		} else if doLow {
+			detail = fmt.Sprintf("Nước nóng và DO kit %.1f mg/L. Hạ nhiệt từ từ, tăng sục khí mạnh. Không đổ đá trực tiếp vào hồ.", *do.Current)
+		}
 		actions = append(actions, Action{
 			Type:   "increase_aeration",
-			Title:  "Tăng sục khí / hạ nhiệt",
-			Detail: "Nước nóng làm giảm oxy. Hạ nhiệt từ từ (quạt mặt nước, giảm đèn), tăng sục khí. Không đổ đá trực tiếp vào hồ.",
+			Title:  title,
+			Detail: detail,
 		})
 	}
 	if tempLow {
@@ -104,7 +158,8 @@ func applyRules(res *Result) {
 	needChange := turbDanger || (turbHigh && turb.Slope == "rising") ||
 		(tdsHigh && tds.Slope == "rising") ||
 		(phLow && (tdsHigh || tds.Slope == "rising")) ||
-		(phHigh && ph.Slope != "falling")
+		(phHigh && ph.Slope != "falling") ||
+		tanDanger || nh3Danger || (nh3High && tanHigh)
 
 	if needChange {
 		amount := 20
@@ -121,6 +176,10 @@ func applyRules(res *Result) {
 		}
 		if turbHigh && tdsHigh {
 			detail = "Độ đục và TDS cùng tăng: giảm cho ăn, hút cặn, thay nước. Kiểm tra lọc cơ học."
+		}
+		if tanDanger || nh3Danger {
+			detail = "Amonia kit cao: thay nước ngay (đã khử chlorine, cùng nhiệt), ngưng cho ăn, tăng sục khí. Không dùng ammonia lock thay cho thay nước."
+			amount = 30
 		}
 		actions = append(actions, Action{
 			Type:      "water_change_percent",
@@ -143,11 +202,15 @@ func applyRules(res *Result) {
 		})
 	}
 
-	if (tdsHigh && tds.Slope != "falling") || (turbHigh && tds.Slope == "rising") {
+	if (tdsHigh && tds.Slope != "falling") || (turbHigh && tds.Slope == "rising") || tanHigh || nh3High {
+		feedDetail := "TDS/độ đục tăng thường do thức ăn thừa. Cho ăn ít hơn, vớt thức ăn không ăn hết."
+		if tanHigh || nh3High {
+			feedDetail = "Amonia từ kit đang cao: ngưng hoặc giảm mạnh cho ăn 1–2 ngày, vớt thức ăn thừa, tăng sục khí."
+		}
 		actions = append(actions, Action{
 			Type:   "reduce_feeding",
 			Title:  "Giảm cho ăn 1–2 ngày",
-			Detail: "TDS/độ đục tăng thường do thức ăn thừa. Cho ăn ít hơn, vớt thức ăn không ăn hết.",
+			Detail: feedDetail,
 		})
 	}
 
@@ -188,6 +251,12 @@ func applyRules(res *Result) {
 	if improvingPH || improvingTDS || improvingTurb {
 		doNot = append(doNot, "Chỉ số đang về vùng tốt — đừng chồng thêm hóa chất hôm nay.")
 	}
+	if nh3Danger || tanDanger {
+		doNot = append(doNot, "Không tắt sục khí khi amonia/oxy xấu. Không đổ ammonia lock rồi thôi thay nước.")
+	}
+	if hasKitDO || hasKitNH3 {
+		doNot = append(doNot, "Số Oxi/Amonia là test kit thủ công, không phải cảm biến ESP — nhập lại khi đo kit mới.")
+	}
 	doNot = append(doNot, "Không tắt lọc và không trộn nhiều chế phẩm cùng lúc.")
 
 	if len(actions) == 0 {
@@ -211,7 +280,7 @@ func applyRules(res *Result) {
 	}
 	res.Actions = actions
 	res.DoNot = doNot
-	res.Summary = ruleSummary(res, phLow, tdsHigh, turbHigh, improvingPH, improvingTDS, improvingTurb)
+	res.Summary = ruleSummary(res, phLow, tdsHigh, turbHigh, improvingPH, improvingTDS, improvingTurb, doLow, nh3High || tanHigh)
 }
 
 func isDanger(f Finding, th Thresholds) bool {
@@ -228,6 +297,12 @@ func isDanger(f Finding, th Thresholds) bool {
 		return v > th.TDSMax+140 || v < th.TDSMin-60
 	case "temperature":
 		return v > th.TempMax+2 || v < th.TempMin-3
+	case "do":
+		return v < 3
+	case "tan":
+		return v > th.TANMax
+	case "nh3_free":
+		return v > th.NH3FreeMax
 	}
 	return false
 }
@@ -274,6 +349,48 @@ func findingFor(metric, label string, tr MetricTrend, min, max float64, unit str
 	return f
 }
 
+func findingForTAN(tr MetricTrend, warn, danger float64) Finding {
+	f := Finding{Metric: "tan", Value: tr.Current, Target: [2]float64{0, warn}, Slope: tr.Slope, Status: "missing"}
+	if tr.Current == nil {
+		f.Label = "Chưa nhập TAN (kit amonia)"
+		return f
+	}
+	v := *tr.Current
+	switch {
+	case v > danger:
+		f.Status = "high"
+		f.Label = fmt.Sprintf("TAN kit cao (%.2f mg/L)", v)
+	case v > warn:
+		f.Status = "high"
+		f.Label = fmt.Sprintf("TAN kit hơi cao (%.2f mg/L)", v)
+	default:
+		f.Status = "ok"
+		f.Label = fmt.Sprintf("TAN kit ổn (%.2f mg/L)", v)
+	}
+	return f
+}
+
+func findingForNH3(tr MetricTrend, warn, danger float64) Finding {
+	f := Finding{Metric: "nh3_free", Value: tr.Current, Target: [2]float64{0, warn}, Slope: tr.Slope, Status: "missing"}
+	if tr.Current == nil {
+		f.Label = "Chưa ước lượng NH₃ tự do"
+		return f
+	}
+	v := *tr.Current
+	switch {
+	case v > danger:
+		f.Status = "high"
+		f.Label = fmt.Sprintf("NH₃ tự do nguy hiểm (%.3f mg/L)", v)
+	case v > warn:
+		f.Status = "high"
+		f.Label = fmt.Sprintf("NH₃ tự do hơi cao (%.3f mg/L)", v)
+	default:
+		f.Status = "ok"
+		f.Label = fmt.Sprintf("NH₃ tự do ổn (%.3f mg/L)", v)
+	}
+	return f
+}
+
 func findingForTurbidity(tr MetricTrend, warn, danger float64) Finding {
 	f := Finding{Metric: "turbidity", Value: tr.Current, Target: [2]float64{0, warn}, Slope: tr.Slope, Status: "missing"}
 	if tr.Current == nil {
@@ -315,7 +432,13 @@ func slopeHint(slope string) string {
 	return ""
 }
 
-func ruleSummary(res *Result, phLow, tdsHigh, turbHigh, improvingPH, improvingTDS, improvingTurb bool) string {
+func ruleSummary(res *Result, phLow, tdsHigh, turbHigh, improvingPH, improvingTDS, improvingTurb, doLow, ammoniaHigh bool) string {
+	if ammoniaHigh {
+		return "Amonia từ test kit đang cao (TAN và/hoặc NH₃ tự do). Ưu tiên thay nước, ngưng cho ăn, tăng sục khí trước các chỉ số khác."
+	}
+	if doLow {
+		return "Oxy hòa tan (kit) thấp. Tăng sục khí, hạn chế khuấy đáy, đo kit lại sau vài giờ."
+	}
 	if !res.Ready {
 		return "Chưa đủ chuỗi đo để kết luận xu hướng. Bật lịch auto vài giờ rồi phân tích lại. Các đề xuất dưới đây chỉ dựa trên điểm hiện tại, mức tin cậy thấp."
 	}

@@ -119,7 +119,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
       </div>
 
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Auto: backend gửi <b>measure</b>. ESP tự xếp FILL mức 1 → pH/turb → FILL mức 2 → TDS → DRAIN.
+        Auto: backend gửi <b>ph / turb / tds</b> khi đến hạn. ESP bơm đúng phao, đo, hết queue xả 30s.
       </p>
 
       <div style={{ marginBottom: '16px' }}>

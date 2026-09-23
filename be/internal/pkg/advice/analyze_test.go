@@ -214,3 +214,47 @@ func typesOf(actions []Action) []string {
 	}
 	return out
 }
+
+func TestAnalyzeWithKit_AmmoniaAndDO(t *testing.T) {
+	now := time.Now()
+	history := staggeredHistory(now, 6, time.Hour, func(elapsed time.Duration) (ph, tds, turb, temp *float64) {
+		return f64(7.4), f64(400), f64(10), f64(28)
+	})
+	kits := []fish.KitReading{{
+		DOMGL:      f64(3.5),
+		TANMGL:     f64(2.0),
+		MeasuredAt: now,
+	}}
+	res := AnalyzeWithKit(history, kits, Profile{Species: "ca_chinh", VolumeL: 9000}, nil)
+	if res.Current["do"] == nil || *res.Current["do"] != 3.5 {
+		t.Fatalf("do=%v", res.Current["do"])
+	}
+	if res.Current["tan"] == nil {
+		t.Fatal("missing tan")
+	}
+	if res.Current["nh3_free"] == nil || *res.Current["nh3_free"] <= 0 {
+		t.Fatalf("nh3_free=%v", res.Current["nh3_free"])
+	}
+	if res.Kit.Source != "kit" || res.Kit.Stale {
+		t.Fatalf("kit snapshot=%+v", res.Kit)
+	}
+	types := typesOf(res.Actions)
+	hasAeration, hasChange, hasFeed := false, false, false
+	for _, ty := range types {
+		if ty == "increase_aeration" {
+			hasAeration = true
+		}
+		if ty == "water_change_percent" {
+			hasChange = true
+		}
+		if ty == "reduce_feeding" {
+			hasFeed = true
+		}
+	}
+	if !hasAeration || !hasChange || !hasFeed {
+		t.Fatalf("actions=%v", types)
+	}
+	if res.Overall != "danger" {
+		t.Fatalf("overall=%s", res.Overall)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
@@ -63,6 +64,7 @@ func (h *FishHandler) Pump(c *gin.Context) {
 	var req struct {
 		Target string `json:"target"` // "inlet" | "drain"
 		State  bool   `json:"state"`
+		Level  int    `json:"level"` // inlet: 1 = phao 1, 2 = phao 2
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respond.BadRequest(c, "invalid body: target and state required")
@@ -75,16 +77,28 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State); err != nil {
+	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State, req.Level); err != nil {
 		respond.InternalError(c, err.Error())
 		return
 	}
 
+	action := "inlet_off"
+	if target == "drain" {
+		if req.State {
+			action = "drain_on"
+		} else {
+			action = "drain_off"
+		}
+	} else if req.State {
+		action = "inlet_on"
+	}
 	respond.OK(c, gin.H{
 		"message": "Pump command sent",
 		"device":  deviceID,
 		"target":  target,
 		"state":   req.State,
+		"level":   req.Level,
+		"action":  action,
 	})
 }
 
@@ -384,6 +398,57 @@ func (h *FishHandler) GetAdvice(c *gin.Context) {
 		return
 	}
 	respond.OK(c, res)
+}
+
+func (h *FishHandler) SaveKitReading(c *gin.Context) {
+	deviceID := c.Param("id")
+	if deviceID == "" {
+		respond.BadRequest(c, "missing device id")
+		return
+	}
+	var req struct {
+		DOMGL      *float64 `json:"do_mg_l"`
+		TANMGL     *float64 `json:"tan_mg_l"`
+		MeasuredAt string   `json:"measured_at"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respond.BadRequest(c, "JSON không hợp lệ")
+		return
+	}
+	row := &fish.KitReading{
+		DeviceID: deviceID,
+		DOMGL:    req.DOMGL,
+		TANMGL:   req.TANMGL,
+	}
+	if ts := strings.TrimSpace(req.MeasuredAt); ts != "" {
+		t, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			respond.BadRequest(c, "measured_at phải là RFC3339")
+			return
+		}
+		row.MeasuredAt = t
+	}
+	saved, err := h.svc.SaveKitReading(c.Request.Context(), row)
+	if err != nil {
+		respond.BadRequest(c, err.Error())
+		return
+	}
+	respond.OK(c, saved)
+}
+
+func (h *FishHandler) ListKitReadings(c *gin.Context) {
+	deviceID := c.Param("id")
+	if deviceID == "" {
+		respond.BadRequest(c, "missing device id")
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	list, err := h.svc.ListKitReadings(c.Request.Context(), deviceID, limit)
+	if err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+	respond.OK(c, list)
 }
 
 // 9. Lấy danh sách thiết bị

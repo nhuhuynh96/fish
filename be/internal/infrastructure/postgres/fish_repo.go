@@ -363,3 +363,64 @@ func (s *Store) SavePondConfig(ctx context.Context, cfg *fish.PondConfig) error 
 	}
 	return nil
 }
+
+func (s *Store) SaveKitReading(ctx context.Context, r *fish.KitReading) error {
+	query := `
+		INSERT INTO kit_readings (
+			id, device_id, do_mg_l, tan_mg_l, nh3_free_mg_l, ph_used, temp_used,
+			source, measured_at, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		r.ID, r.DeviceID, r.DOMGL, r.TANMGL, r.NH3FreeMGL, r.PHUsed, r.TempUsed,
+		r.Source, r.MeasuredAt, r.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert kit_reading: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListKitReadings(ctx context.Context, deviceID string, limit int) ([]fish.KitReading, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	return s.listKitReadings(ctx, `
+		SELECT id, device_id, do_mg_l, tan_mg_l, nh3_free_mg_l, ph_used, temp_used,
+			source, measured_at, created_at
+		FROM kit_readings WHERE device_id = $1
+		ORDER BY measured_at DESC LIMIT $2
+	`, deviceID, limit)
+}
+
+func (s *Store) ListKitReadingsSince(ctx context.Context, deviceID string, since time.Time, limit int) ([]fish.KitReading, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	return s.listKitReadings(ctx, `
+		SELECT id, device_id, do_mg_l, tan_mg_l, nh3_free_mg_l, ph_used, temp_used,
+			source, measured_at, created_at
+		FROM kit_readings WHERE device_id = $1 AND measured_at >= $2
+		ORDER BY measured_at DESC LIMIT $3
+	`, deviceID, since, limit)
+}
+
+func (s *Store) listKitReadings(ctx context.Context, query string, args ...any) ([]fish.KitReading, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query kit_readings: %w", err)
+	}
+	defer rows.Close()
+	out := make([]fish.KitReading, 0)
+	for rows.Next() {
+		var r fish.KitReading
+		if err := rows.Scan(
+			&r.ID, &r.DeviceID, &r.DOMGL, &r.TANMGL, &r.NH3FreeMGL, &r.PHUsed, &r.TempUsed,
+			&r.Source, &r.MeasuredAt, &r.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan kit_reading: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

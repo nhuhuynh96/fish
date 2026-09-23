@@ -30,7 +30,7 @@ export const api = {
     return json.data || [];
   },
 
-  async triggerMeasure(deviceId, sensors = ['all']) {
+  async triggerMeasure(deviceId, sensors = ['ph', 'turbidity', 'tds']) {
     const res = await fetch(`${API_BASE}/devices/${deviceId}/measure`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -39,11 +39,11 @@ export const api = {
     return res.json();
   },
 
-  async setPump(deviceId, target, state) {
+  async setPump(deviceId, target, state, level = 2) {
     const res = await fetch(`${API_BASE}/devices/${deviceId}/pump`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target, state }),
+      body: JSON.stringify({ target, state, level }),
     });
     return res.json();
   },
@@ -113,6 +113,29 @@ export const api = {
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || 'Advice failed');
     return json.data;
+  },
+
+  async saveKitReading(deviceId, { do_mg_l, tan_mg_l, measured_at }) {
+    const res = await fetch(`${API_BASE}/devices/${deviceId}/kit-readings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        do_mg_l: do_mg_l === '' || do_mg_l == null ? null : Number(do_mg_l),
+        tan_mg_l: tan_mg_l === '' || tan_mg_l == null ? null : Number(tan_mg_l),
+        measured_at: measured_at || undefined,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Lưu số kit thất bại');
+    return json.data;
+  },
+
+  async getKitReadings(deviceId, limit = 10) {
+    if (!deviceId) return [];
+    const res = await fetch(`${API_BASE}/devices/${deviceId}/kit-readings?limit=${limit}`);
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Load kit failed');
+    return json.data || [];
   },
 
   async getPondConfig() {

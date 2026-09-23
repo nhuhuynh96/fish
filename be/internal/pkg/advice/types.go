@@ -20,6 +20,11 @@ type Thresholds struct {
 	TurbidityMax  float64 `json:"turbidity_max"`
 	TDSMin        float64 `json:"tds_min"`
 	TDSMax        float64 `json:"tds_max"`
+	DOMin         float64 `json:"do_min"`
+	TANWarn       float64 `json:"tan_warn"`
+	TANMax        float64 `json:"tan_max"`
+	NH3FreeWarn   float64 `json:"nh3_free_warn"`
+	NH3FreeMax    float64 `json:"nh3_free_max"`
 }
 
 type Snapshot struct {
@@ -66,6 +71,12 @@ type SeriesPoint struct {
 	TDS         *float64 `json:"tds,omitempty"`
 }
 
+type KitSnapshot struct {
+	MeasuredAt *time.Time `json:"measured_at,omitempty"`
+	Stale      bool       `json:"stale"`
+	Source     string     `json:"source,omitempty"`
+}
+
 type Result struct {
 	Overall      string                 `json:"overall"`
 	Ready        bool                   `json:"ready"`
@@ -84,6 +95,7 @@ type Result struct {
 	SampleWindow string                 `json:"sample_window"`
 	LatestAt     *time.Time             `json:"latest_at,omitempty"`
 	Stale        bool                   `json:"stale"`
+	Kit          KitSnapshot            `json:"kit"`
 }
 
 type Narration struct {

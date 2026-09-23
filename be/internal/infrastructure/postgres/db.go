@@ -132,6 +132,19 @@ func initSchema(db *sql.DB) error {
 		`ALTER TABLE device_calibration ADD COLUMN IF NOT EXISTS tds_ref_v DOUBLE PRECISION NOT NULL DEFAULT 0`,
 		`ALTER TABLE device_calibration ADD COLUMN IF NOT EXISTS tds_ref_ppm DOUBLE PRECISION NOT NULL DEFAULT 0`,
 		`ALTER TABLE device_calibration ADD COLUMN IF NOT EXISTS tds_max_ppm DOUBLE PRECISION NOT NULL DEFAULT 2000.0`,
+		`CREATE TABLE IF NOT EXISTS kit_readings (
+			id VARCHAR(64) PRIMARY KEY,
+			device_id VARCHAR(64) NOT NULL,
+			do_mg_l DOUBLE PRECISION,
+			tan_mg_l DOUBLE PRECISION,
+			nh3_free_mg_l DOUBLE PRECISION,
+			ph_used DOUBLE PRECISION,
+			temp_used DOUBLE PRECISION,
+			source VARCHAR(32) NOT NULL DEFAULT 'kit',
+			measured_at TIMESTAMPTZ NOT NULL,
+			created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_kit_readings_device_measured ON kit_readings (device_id, measured_at DESC)`,
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil {

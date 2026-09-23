@@ -34,6 +34,8 @@ function formatDelta(metric, delta) {
   if (metric === 'ph') return `${sign}${Number(delta).toFixed(2)}`;
   if (metric === 'tds') return `${sign}${Math.round(delta)} ppm`;
   if (metric === 'turbidity') return `${sign}${Number(delta).toFixed(1)} NTU`;
+  if (metric === 'do' || metric === 'tan') return `${sign}${Number(delta).toFixed(2)} mg/L`;
+  if (metric === 'nh3_free') return `${sign}${Number(delta).toFixed(3)} mg/L`;
   return `${sign}${Number(delta).toFixed(1)} °C`;
 }
 
@@ -56,6 +58,9 @@ const METRIC_NAME = {
   ph: 'pH',
   turbidity: 'Độ đục',
   tds: 'TDS',
+  do: 'Oxy (kit)',
+  tan: 'TAN (kit)',
+  nh3_free: 'NH₃ tự do',
 };
 
 export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfigChange }) {
@@ -63,6 +68,7 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
   const [advice, setAdvice] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [latestKit, setLatestKit] = useState(null);
 
   useEffect(() => {
     if (!pondConfig) return;
@@ -81,6 +87,13 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
   useEffect(() => {
     setAdvice(null);
     setError('');
+    if (!deviceId) {
+      setLatestKit(null);
+      return;
+    }
+    api.getKitReadings(deviceId, 1)
+      .then((list) => setLatestKit(list?.[0] || null))
+      .catch(() => setLatestKit(null));
   }, [deviceId]);
 
   const badge = useMemo(() => overallBadge(advice?.overall), [advice]);
@@ -131,7 +144,7 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
       </div>
 
       <p className="advice-lead">
-        Phân tích cần OpenAI. Không kết nối hoặc không gọi được API thì không ra đề xuất.
+        Phân tích cần OpenAI. Tự lấy pH/TDS/độ đục từ ESP và Oxy/Amonia từ nhật ký test kit đã lưu.
       </p>
 
       <div className="advice-profile">
@@ -178,6 +191,22 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
         </button>
       </div>
 
+      <div className="advice-kit">
+        {latestKit ? (
+          <p className="advice-field-hint" style={{ margin: 0 }}>
+            Kit mới nhất: {new Date(latestKit.measured_at).toLocaleString('vi-VN')}
+            {latestKit.do_mg_l != null ? ` · DO ${latestKit.do_mg_l} mg/L` : ''}
+            {latestKit.tan_mg_l != null ? ` · TAN ${latestKit.tan_mg_l} mg/L` : ''}
+            {latestKit.nh3_free_mg_l != null ? ` · NH₃ ~${Number(latestKit.nh3_free_mg_l).toFixed(3)} mg/L` : ''}
+            {' '}— nhập thêm ở menu <b>Test Kit</b>.
+          </p>
+        ) : (
+          <p className="advice-field-hint" style={{ margin: 0 }}>
+            Chưa có số Oxy/Amonia. Vào menu <b>Test Kit</b> để nhập và lưu lịch sử; lần phân tích sau sẽ tự lấy.
+          </p>
+        )}
+      </div>
+
       {pondConfig?.badges && (
         <div className="advice-findings" style={{ marginTop: '-4px' }}>
           {['ph', 'turbidity', 'tds', 'temperature'].map((key) => (
@@ -209,19 +238,31 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
             </div>
           )}
 
+          {advice.kit?.stale && (
+            <div className="advice-banner">
+              Số test kit đã cũ hơn 24 giờ{advice.kit.measured_at ? ` (${new Date(advice.kit.measured_at).toLocaleString('vi-VN')})` : ''}. Vào menu Test Kit đo lại rồi lưu.
+            </div>
+          )}
+
           <div className="advice-meta">
             {advice.used_llm ? 'Đã phân tích qua OpenAI' : 'Chưa gọi OpenAI (thiếu chuỗi đo)'}
             {advice.sample_window ? ` · cửa sổ ${advice.sample_window}` : ''}
           </div>
 
           <div className="advice-trend-grid">
-            {['ph', 'tds', 'turbidity', 'temperature'].map((key) => {
+            {['ph', 'tds', 'turbidity', 'temperature', 'do', 'tan', 'nh3_free'].map((key) => {
               const tr = advice.trend?.[key] || {};
               return (
                 <div key={key} className="advice-trend-item">
                   <div className="advice-trend-name">{METRIC_NAME[key]}</div>
                   <div className="advice-trend-now">
-                    {tr.current == null ? '—' : key === 'tds' ? Math.round(tr.current) : tr.current}
+                    {tr.current == null
+                      ? '—'
+                      : key === 'tds'
+                        ? Math.round(tr.current)
+                        : key === 'nh3_free'
+                          ? Number(tr.current).toFixed(3)
+                          : tr.current}
                   </div>
                   <div className="advice-trend-slope">{slopeLabel(tr.slope)}</div>
                   <div className="advice-trend-deltas">

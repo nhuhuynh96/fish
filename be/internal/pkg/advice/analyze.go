@@ -32,16 +32,23 @@ func NormalizeProfile(p Profile) Profile {
 }
 
 func Analyze(history []fish.Measurement, profile Profile) *Result {
-	return AnalyzeWith(history, profile, nil)
+	return AnalyzeWithKit(history, nil, profile, nil)
 }
 
 func AnalyzeWith(history []fish.Measurement, profile Profile, th *Thresholds) *Result {
+	return AnalyzeWithKit(history, nil, profile, th)
+}
+
+const kitFreshFor = 24 * time.Hour
+
+func AnalyzeWithKit(history []fish.Measurement, kits []fish.KitReading, profile Profile, th *Thresholds) *Result {
 	profile = NormalizeProfile(profile)
 	resolved := ThresholdsFor(profile.Species)
 	if th != nil {
-		resolved = *th
+		resolved = mergeThresholds(resolved, *th)
 	}
 	series := BuildSeries(history)
+	hasKit := latestKit(kits) != nil
 
 	res := &Result{
 		Profile:      profile,
@@ -52,7 +59,7 @@ func AnalyzeWith(history []fish.Measurement, profile Profile, th *Thresholds) *R
 		SampleWindow: "24h",
 	}
 
-	if len(series) == 0 {
+	if len(series) == 0 && !hasKit {
 		res.Overall = "unknown"
 		res.Ready = false
 		res.Reason = "no_data"
@@ -63,29 +70,132 @@ func AnalyzeWith(history []fish.Measurement, profile Profile, th *Thresholds) *R
 		return res
 	}
 
-	last := series[len(series)-1]
-	res.LatestAt = &last.Time
-	res.Stale = time.Since(last.Time) > 6*time.Hour
-	res.Current = map[string]*float64{
-		"temperature": roundPtr(last.Temperature, 1),
-		"ph":          roundPtr(last.PH, 2),
-		"turbidity":   roundPtr(last.Turbidity, 1),
-		"tds":         roundPtr(last.TDS, 0),
+	var lastPH, lastTemp *float64
+	if len(series) > 0 {
+		last := series[len(series)-1]
+		res.LatestAt = &last.Time
+		res.Stale = time.Since(last.Time) > 6*time.Hour
+		lastPH, lastTemp = last.PH, last.Temperature
+		res.Current = map[string]*float64{
+			"temperature": roundPtr(last.Temperature, 1),
+			"ph":          roundPtr(last.PH, 2),
+			"turbidity":   roundPtr(last.Turbidity, 1),
+			"tds":         roundPtr(last.TDS, 0),
+		}
+		res.Trend = map[string]MetricTrend{
+			"temperature": buildTrend(history, series, "temperature", 0.3, 1),
+			"ph":          buildTrend(history, series, "ph", 0.1, 2),
+			"turbidity":   buildTrend(history, series, "turbidity", 3, 1),
+			"tds":         buildTrend(history, series, "tds", 20, 0),
+		}
+		res.Series6h = downsample(series, last.Time.Add(-6*time.Hour), 30*time.Minute, 12)
+		res.Ready, res.Reason = readiness(res.Trend)
+	} else {
+		res.Ready = false
+		res.Reason = "kit_only"
 	}
-	res.Trend = map[string]MetricTrend{
-		"temperature": buildTrend(history, series, "temperature", 0.3, 1),
-		"ph":          buildTrend(history, series, "ph", 0.1, 2),
-		"turbidity":   buildTrend(history, series, "turbidity", 3, 1),
-		"tds":         buildTrend(history, series, "tds", 20, 0),
-	}
-	res.Series6h = downsample(series, last.Time.Add(-6*time.Hour), 30*time.Minute, 12)
 
-	res.Ready, res.Reason = readiness(res.Trend)
+	applyKit(res, kits, lastPH, lastTemp)
 	applyRules(res)
 	if res.Stale && res.LatestAt != nil {
 		res.Summary = "Dữ liệu đo đã cũ hơn 6 giờ (mẫu cuối " + res.LatestAt.Local().Format("02/01 15:04") + "). " + res.Summary
 	}
+	if res.Kit.Stale && res.Kit.MeasuredAt != nil {
+		res.Summary = "Số test kit đã cũ hơn 24 giờ (nhập " + res.Kit.MeasuredAt.Local().Format("02/01 15:04") + "). " + res.Summary
+	}
 	return res
+}
+
+func latestKit(kits []fish.KitReading) *fish.KitReading {
+	var best *fish.KitReading
+	for i := range kits {
+		k := &kits[i]
+		if k.DOMGL == nil && k.TANMGL == nil {
+			continue
+		}
+		if best == nil || k.MeasuredAt.After(best.MeasuredAt) {
+			best = k
+		}
+	}
+	return best
+}
+
+func applyKit(res *Result, kits []fish.KitReading, ph, temp *float64) {
+	if res.Current == nil {
+		res.Current = map[string]*float64{}
+	}
+	if res.Trend == nil {
+		res.Trend = map[string]MetricTrend{}
+	}
+	k := latestKit(kits)
+	if k == nil {
+		res.Trend["do"] = MetricTrend{Slope: "unknown"}
+		res.Trend["tan"] = MetricTrend{Slope: "unknown"}
+		res.Trend["nh3_free"] = MetricTrend{Slope: "unknown"}
+		return
+	}
+	stale := time.Since(k.MeasuredAt) > kitFreshFor
+	res.Kit = KitSnapshot{
+		MeasuredAt: &k.MeasuredAt,
+		Stale:      stale,
+		Source:     "kit",
+	}
+	res.Current["do"] = roundPtr(k.DOMGL, 1)
+	res.Current["tan"] = roundPtr(k.TANMGL, 2)
+	tempC := 25.0
+	if temp != nil {
+		tempC = *temp
+	} else if k.TempUsed != nil {
+		tempC = *k.TempUsed
+	}
+	phV := 7.0
+	if ph != nil {
+		phV = *ph
+	} else if k.PHUsed != nil {
+		phV = *k.PHUsed
+	}
+	var nh3 *float64
+	if k.TANMGL != nil {
+		v := FreeAmmonia(*k.TANMGL, phV, tempC)
+		nh3 = roundPtr(&v, 3)
+		res.Current["nh3_free"] = nh3
+	}
+	nDO, nTAN := 0, 0
+	var firstDO, lastDO, firstTAN, lastTAN time.Time
+	for _, row := range kits {
+		if row.DOMGL != nil {
+			nDO++
+			if firstDO.IsZero() || row.MeasuredAt.Before(firstDO) {
+				firstDO = row.MeasuredAt
+			}
+			if lastDO.IsZero() || row.MeasuredAt.After(lastDO) {
+				lastDO = row.MeasuredAt
+			}
+		}
+		if row.TANMGL != nil {
+			nTAN++
+			if firstTAN.IsZero() || row.MeasuredAt.Before(firstTAN) {
+				firstTAN = row.MeasuredAt
+			}
+			if lastTAN.IsZero() || row.MeasuredAt.After(lastTAN) {
+				lastTAN = row.MeasuredAt
+			}
+		}
+	}
+	doTrend := MetricTrend{Current: res.Current["do"], Slope: "unknown", N: nDO}
+	if nDO >= 2 {
+		doTrend.SpanHours = lastDO.Sub(firstDO).Hours()
+	}
+	tanTrend := MetricTrend{Current: res.Current["tan"], Slope: "unknown", N: nTAN}
+	if nTAN >= 2 {
+		tanTrend.SpanHours = lastTAN.Sub(firstTAN).Hours()
+	}
+	res.Trend["do"] = doTrend
+	res.Trend["tan"] = tanTrend
+	res.Trend["nh3_free"] = MetricTrend{Current: nh3, Slope: "unknown", N: nTAN}
+	if !stale && (k.DOMGL != nil || k.TANMGL != nil) {
+		res.Limitations = "Oxy và amonia lấy từ test kit thủ công (không phải cảm biến ESP). NH₃ tự do ước lượng từ TAN + pH/nhiệt Emerson. Chưa có NO2/NO3/KH/GH."
+	}
 }
 
 func readiness(trends map[string]MetricTrend) (bool, string) {

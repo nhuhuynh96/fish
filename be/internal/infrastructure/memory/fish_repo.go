@@ -15,6 +15,7 @@ type Store struct {
 	devices      map[string]*fish.Device
 	calibrations map[string]*fish.DeviceCalibration
 	pond         *fish.PondConfig
+	kits         map[string][]fish.KitReading
 }
 
 func NewStore() *Store {
@@ -23,6 +24,7 @@ func NewStore() *Store {
 		events:       make(map[string][]fish.SamplingEvent),
 		devices:      make(map[string]*fish.Device),
 		calibrations: make(map[string]*fish.DeviceCalibration),
+		kits:         make(map[string][]fish.KitReading),
 	}
 }
 
@@ -212,4 +214,43 @@ func (s *Store) SavePondConfig(ctx context.Context, cfg *fish.PondConfig) error 
 	cp := *cfg.Normalize()
 	s.pond = &cp
 	return nil
+}
+
+func (s *Store) SaveKitReading(ctx context.Context, r *fish.KitReading) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	s.kits[r.DeviceID] = append([]fish.KitReading{cp}, s.kits[r.DeviceID]...)
+	if len(s.kits[r.DeviceID]) > 500 {
+		s.kits[r.DeviceID] = s.kits[r.DeviceID][:500]
+	}
+	return nil
+}
+
+func (s *Store) ListKitReadings(ctx context.Context, deviceID string, limit int) ([]fish.KitReading, error) {
+	return s.listKits(deviceID, time.Time{}, limit)
+}
+
+func (s *Store) ListKitReadingsSince(ctx context.Context, deviceID string, since time.Time, limit int) ([]fish.KitReading, error) {
+	return s.listKits(deviceID, since, limit)
+}
+
+func (s *Store) listKits(deviceID string, since time.Time, limit int) ([]fish.KitReading, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src := s.kits[deviceID]
+	out := make([]fish.KitReading, 0, len(src))
+	for _, k := range src {
+		if !since.IsZero() && k.MeasuredAt.Before(since) {
+			continue
+		}
+		out = append(out, k)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }

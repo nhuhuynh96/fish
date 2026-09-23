@@ -11,6 +11,7 @@ import EventLogStream from './components/EventLogStream';
 import HistoryTable from './components/HistoryTable';
 import SensorTrendChart from './components/SensorTrendChart';
 import CalibrationPanel from './components/CalibrationPanel';
+import KitLogPanel from './components/KitLogPanel';
 import DeviceLogStream from './components/DeviceLogStream';
 
 const HISTORY_LIMIT = 100;
@@ -37,14 +38,14 @@ function applyPumpFromEvent(payload, setInletOn, setDrainOn) {
   } else {
     const stage = payload.stage || '';
     const msg = payload.message || '';
-    if (stage === 'filling' || msg.includes('Bơm nạp nước: BẬT')) setInletOn(true);
+    if (msg.includes('Bơm nạp: BẬT') || msg.includes('Bơm nạp đã bật')) setInletOn(true);
     if (
-      stage === 'filled' ||
       stage === 'queue_cleared' ||
-      msg.includes('tự tắt bơm nạp') ||
-      msg.includes('Bơm nạp nước: TẮT') ||
-      msg.includes('Không bật bơm') ||
-      (stage === 'manual_pump_timeout' && msg.includes('Bơm nạp'))
+      stage === 'manual_pump_timeout' ||
+      msg.includes('Đã tắt bơm nạp') ||
+      msg.includes('Tắt bơm') ||
+      msg.includes('Không bơm nữa') ||
+      msg.includes('Đã ngưng')
     ) {
       setInletOn(false);
     }
@@ -55,14 +56,12 @@ function applyPumpFromEvent(payload, setInletOn, setDrainOn) {
   } else {
     const stage = payload.stage || '';
     const msg = payload.message || '';
-    if (stage === 'draining' || msg.includes('Van xả nước: BẬT')) setDrainOn(true);
+    if (stage === 'draining' || msg.includes('Van xả: BẬT')) setDrainOn(true);
     if (
       stage === 'drained' ||
       stage === 'queue_cleared' ||
-      msg.includes('tự tắt van xả') ||
-      msg.includes('Van xả nước: TẮT') ||
-      msg.includes('Không mở van xả') ||
-      (stage === 'manual_pump_timeout' && msg.includes('van xả'))
+      msg.includes('Đã tắt van xả') ||
+      msg.includes('Đã xả 30s')
     ) {
       setDrainOn(false);
     }
@@ -72,7 +71,7 @@ function applyPumpFromEvent(payload, setInletOn, setDrainOn) {
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [devices, setDevices] = useState([]);
-  const [selectedDevice, setSelectedDevice] = useState('esp32_6ecb08');
+  const [selectedDevice, setSelectedDevice] = useState('esp32_4b70');
   const [wsConnected, setWsConnected] = useState(false);
   const [latestMeasurement, setLatestMeasurement] = useState(null);
   const [history, setHistory] = useState([]);
@@ -179,11 +178,11 @@ export default function App() {
     }
   };
 
-  const handlePump = async (target, state) => {
+  const handlePump = async (target, state, level = 2) => {
     if (target === 'inlet') setInletOn(state);
     if (target === 'drain') setDrainOn(state);
     try {
-      await api.setPump(selectedDevice, target, state);
+      await api.setPump(selectedDevice, target, state, level);
     } catch (e) {
       if (target === 'inlet') setInletOn(!state);
       if (target === 'drain') setDrainOn(!state);
@@ -264,6 +263,12 @@ export default function App() {
           </div>
 
           <DeviceLogStream logs={deviceLogs} />
+        </section>
+      )}
+
+      {activeTab === 'kit' && (
+        <section className="page-section">
+          <KitLogPanel deviceId={selectedDevice} />
         </section>
       )}
 

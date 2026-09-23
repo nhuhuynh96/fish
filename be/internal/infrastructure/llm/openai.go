@@ -60,10 +60,11 @@ func (c *Client) Narrate(ctx context.Context, result *advice.Result) (*advice.Na
 	}
 
 	sys := `Bạn là trợ lý hồ cá. Chỉ diễn giải dữ liệu JSON đã có.
-Không bịa cảm biến (NH3, NO2, NO3, DO). Không đổi type/priority của actions.
+DO (do) và TAN/NH3 (tan, nh3_free) chỉ dùng khi có trong current — đó là số test kit thủ công, không phải cảm biến ESP.
+Không bịa cảm biến còn thiếu (NO2, NO3, KH/GH, hoặc DO/NH3 nếu current không có). Không đổi type/priority của actions.
 Không nêu liều hóa chất theo gram nếu volume_l <= 0.
 Trả JSON: {"summary":"...","action_details":{"water_change_percent":"..."},"do_not":["..."]}
-summary: 1-2 câu tiếng Việt, nêu xu hướng (đang tăng/giảm) chứ không chỉ giá trị hiện tại.
+summary: 1-2 câu tiếng Việt, nêu xu hướng (đang tăng/giảm) chứ không chỉ giá trị hiện tại. Nếu có NH3/DO kit thì nhắc trong summary.
 action_details: key = action type, value = giải thích ngắn.
 do_not: 2-4 ý cấm.`
 
