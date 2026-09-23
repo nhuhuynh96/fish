@@ -51,6 +51,17 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  frontend:
+    build:
+      context: ./fe
+      dockerfile: Dockerfile
+    container_name: fish_frontend
+    ports:
+      - "${FE_PORT:-3000}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   pgdata:
   mqttdata:

@@ -5,6 +5,7 @@
 .vscode/ipch
 
 fe/node_modules
+fe/dist
 be/build
 be/bin
 .env
