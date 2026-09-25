@@ -33,7 +33,6 @@ function formatDelta(metric, delta) {
   const sign = delta > 0 ? '+' : '';
   if (metric === 'ph') return `${sign}${Number(delta).toFixed(2)}`;
   if (metric === 'tds') return `${sign}${Math.round(delta)} ppm`;
-  if (metric === 'turbidity') return `${sign}${Number(delta).toFixed(1)} NTU`;
   if (metric === 'do' || metric === 'tan') return `${sign}${Number(delta).toFixed(2)} mg/L`;
   if (metric === 'nh3_free') return `${sign}${Number(delta).toFixed(3)} mg/L`;
   return `${sign}${Number(delta).toFixed(1)} °C`;
@@ -56,7 +55,6 @@ function overallBadge(overall) {
 const METRIC_NAME = {
   temperature: 'Nhiệt độ',
   ph: 'pH',
-  turbidity: 'Độ đục',
   tds: 'TDS',
   do: 'Oxy (kit)',
   tan: 'TAN (kit)',
@@ -144,7 +142,7 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
       </div>
 
       <p className="advice-lead">
-        Phân tích cần OpenAI. Tự lấy pH/TDS/độ đục từ ESP và Oxy/Amonia từ nhật ký test kit đã lưu.
+        Phân tích cần OpenAI. Tự lấy pH/TDS/nhiệt độ từ ESP và Oxy/Amonia từ nhật ký test kit đã lưu.
       </p>
 
       <div className="advice-profile">
@@ -209,7 +207,7 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
 
       {pondConfig?.badges && (
         <div className="advice-findings" style={{ marginTop: '-4px' }}>
-          {['ph', 'turbidity', 'tds', 'temperature'].map((key) => (
+          {['ph', 'tds', 'temperature'].map((key) => (
             pondConfig.badges[key]?.ok ? (
               <span key={key} className="sensor-badge badge-ideal" style={{ textTransform: 'none' }}>
                 {pondConfig.badges[key].ok}
@@ -250,7 +248,7 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
           </div>
 
           <div className="advice-trend-grid">
-            {['ph', 'tds', 'turbidity', 'temperature', 'do', 'tan', 'nh3_free'].map((key) => {
+            {['ph', 'tds', 'temperature', 'do', 'tan', 'nh3_free'].map((key) => {
               const tr = advice.trend?.[key] || {};
               return (
                 <div key={key} className="advice-trend-item">

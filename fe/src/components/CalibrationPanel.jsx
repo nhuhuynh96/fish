@@ -132,19 +132,6 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
               Đặt ref_ppm = 0 để tắt scale (chỉ dùng công thức DFRobot).
             </p>
           </fieldset>
-
-          <fieldset className="cal-fieldset">
-            <legend>Độ đục</legend>
-            <label>V nước trong (NTU=0)
-              <input type="number" step="0.01" value={form.turb_v_clear} onChange={handleChange('turb_v_clear')} />
-            </label>
-            <label>V nước đục (NTU max)
-              <input type="number" step="0.01" value={form.turb_v_dirty} onChange={handleChange('turb_v_dirty')} />
-            </label>
-            <label>NTU max
-              <input type="number" step="1" value={form.turb_ntu_max} onChange={handleChange('turb_ntu_max')} />
-            </label>
-          </fieldset>
         </div>
       )}
 
@@ -161,7 +148,6 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
           <div className="raw-debug-grid">
             <span>pH: ADC {latestMeasurement.ph_adc ?? '--'} | {latestMeasurement.ph_voltage != null ? latestMeasurement.ph_voltage.toFixed(3) + 'V' : '--'}</span>
             <span>TDS: ADC {latestMeasurement.tds_adc ?? '--'} | {latestMeasurement.tds_voltage != null ? latestMeasurement.tds_voltage.toFixed(3) + 'V' : '--'}</span>
-            <span>Turb: ADC {latestMeasurement.turbidity_adc ?? '--'} | {latestMeasurement.turbidity_voltage != null ? latestMeasurement.turbidity_voltage.toFixed(3) + 'V' : '--'}</span>
           </div>
         </div>
       )}

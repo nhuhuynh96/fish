@@ -15,7 +15,6 @@ export default function ControlPanel({
   const availableSensors = [
     { id: 'temp', label: '🌡️ Nhiệt độ' },
     { id: 'ph', label: '🧪 Độ pH' },
-    { id: 'turbidity', label: '🌊 Độ đục' },
     { id: 'tds', label: '💎 Chất rắn (TDS)' },
   ];
 
@@ -31,7 +30,7 @@ export default function ControlPanel({
 
   const handleMeasureAll = async () => {
     setLoading(true);
-    await onMeasure(['ph', 'turbidity', 'tds']);
+    await onMeasure(['ph', 'temp', 'tds']);
     setLoading(false);
   };
 
@@ -77,7 +76,7 @@ export default function ControlPanel({
           onClick={handleMeasureAll}
           disabled={loading}
         >
-          🚀 Đo Toàn Bộ Chỉ Số (ph + turbidity + tds)
+          🚀 Đo Toàn Bộ Chỉ Số (pH + nhiệt độ + TDS)
         </button>
       </div>
 
@@ -132,7 +131,7 @@ export default function ControlPanel({
           marginBottom: '20px',
         }}
       >
-        💡 MQTT <code>{'{"action":"inlet_on"|"inlet_off"|"drain_on"|"drain_off","level":1|2}'}</code>. Bơm nạp chọn phao 1 hoặc 2. Đo: ph/turb/tds.
+        💡 MQTT <code>{'{"action":"inlet_on"|"inlet_off"|"drain_on"|"drain_off","level":1|2}'}</code>. Bơm nạp chọn phao 1 hoặc 2. Đo: ph/temp/tds. Đo thử nhiệt: <code>{'{"action":"test_temp"}'}</code>.
       </div>
 
       {/* Action 3: Manual Pump Controls */}

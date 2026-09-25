@@ -30,7 +30,7 @@ export const api = {
     return json.data || [];
   },
 
-  async triggerMeasure(deviceId, sensors = ['ph', 'turbidity', 'tds']) {
+  async triggerMeasure(deviceId, sensors = ['ph', 'temp', 'tds']) {
     const res = await fetch(`${API_BASE}/devices/${deviceId}/measure`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

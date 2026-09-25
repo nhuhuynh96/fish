@@ -21,8 +21,8 @@ function mergeMeasurement(prev, incoming) {
   if (!incoming) return prev;
   const merged = { ...prev, ...incoming };
   const fields = [
-    'temperature', 'ph', 'turbidity', 'tds',
-    'ph_adc', 'ph_voltage', 'tds_adc', 'tds_voltage', 'turbidity_adc', 'turbidity_voltage',
+    'temperature', 'ph', 'tds',
+    'ph_adc', 'ph_voltage', 'tds_adc', 'tds_voltage',
   ];
   for (const f of fields) {
     if (incoming[f] === undefined || incoming[f] === null) {

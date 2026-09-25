@@ -12,7 +12,7 @@ import {
 const SERIES = [
   { key: 'ph', name: 'pH', color: '#34d399', unit: '', domain: [0, 14], digits: 2 },
   { key: 'tds', name: 'TDS', color: '#818cf8', unit: 'ppm', domain: ['auto', 'auto'], digits: 0 },
-  { key: 'turbidity', name: 'Độ đục', color: '#38bdf8', unit: 'NTU', domain: ['auto', 'auto'], digits: 1 },
+  { key: 'temperature', name: 'Nhiệt độ', color: '#f87171', unit: '°C', domain: ['auto', 'auto'], digits: 1 },
 ];
 
 function formatTick(iso) {
@@ -26,16 +26,16 @@ function buildChartRows(history) {
   if (!history?.length) return [];
 
   const chronological = [...history].reverse();
-  const last = { ph: null, tds: null, turbidity: null };
+  const last = { ph: null, tds: null, temperature: null };
   const rows = [];
 
   for (const m of chronological) {
     const t = m.created_at || null;
     if (m.ph != null) last.ph = m.ph;
     if (m.tds != null) last.tds = m.tds;
-    if (m.turbidity != null) last.turbidity = m.turbidity;
+    if (m.temperature != null) last.temperature = m.temperature;
 
-    const hasAny = m.ph != null || m.tds != null || m.turbidity != null;
+    const hasAny = m.ph != null || m.tds != null || m.temperature != null;
     if (!hasAny) continue;
 
     rows.push({
@@ -43,7 +43,7 @@ function buildChartRows(history) {
       label: formatTick(t),
       ph: last.ph,
       tds: last.tds,
-      turbidity: last.turbidity,
+      temperature: last.temperature,
     });
   }
 
@@ -128,7 +128,7 @@ export default function SensorTrendChart({ history }) {
         </svg>
         Biến Thiên Chỉ Số
         <span className="trend-chart-meta">
-          {rows.length > 0 ? `${rows.length} điểm (pH · TDS · độ đục)` : 'Chưa có dữ liệu'}
+          {rows.length > 0 ? `${rows.length} điểm (pH · TDS · nhiệt độ)` : 'Chưa có dữ liệu'}
         </span>
       </div>
 

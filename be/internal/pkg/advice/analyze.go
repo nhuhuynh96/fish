@@ -55,7 +55,7 @@ func AnalyzeWithKit(history []fish.Measurement, kits []fish.KitReading, profile 
 		Thresholds:   resolved,
 		Current:      map[string]*float64{},
 		Trend:        map[string]MetricTrend{},
-		Limitations:  "Chưa đo NH3, NO2, NO3, DO, KH/GH. pH/TDS/độ đục mô tả môi trường nước, không kết luận ngộ độc ammonia.",
+		Limitations:  "Chưa đo NH3, NO2, NO3, DO, KH/GH. pH/TDS/nhiệt độ mô tả môi trường nước, không kết luận ngộ độc ammonia.",
 		SampleWindow: "24h",
 	}
 
@@ -79,13 +79,11 @@ func AnalyzeWithKit(history []fish.Measurement, kits []fish.KitReading, profile 
 		res.Current = map[string]*float64{
 			"temperature": roundPtr(last.Temperature, 1),
 			"ph":          roundPtr(last.PH, 2),
-			"turbidity":   roundPtr(last.Turbidity, 1),
 			"tds":         roundPtr(last.TDS, 0),
 		}
 		res.Trend = map[string]MetricTrend{
 			"temperature": buildTrend(history, series, "temperature", 0.3, 1),
 			"ph":          buildTrend(history, series, "ph", 0.1, 2),
-			"turbidity":   buildTrend(history, series, "turbidity", 3, 1),
 			"tds":         buildTrend(history, series, "tds", 20, 0),
 		}
 		res.Series6h = downsample(series, last.Time.Add(-6*time.Hour), 30*time.Minute, 12)

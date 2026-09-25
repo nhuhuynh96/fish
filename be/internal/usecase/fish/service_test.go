@@ -73,3 +73,29 @@ func TestUpdateCalibration_AffectsNextReading(t *testing.T) {
 		t.Fatalf("expected pH ~7.0 after neutral_v=2.334, got %.2f", *m.PH)
 	}
 }
+
+func TestHandleSensorData_Temperature(t *testing.T) {
+	store := memory.NewStore()
+	svc := NewService(store, store, store, store, nil, nil)
+
+	payload := []byte(`{
+		"device_id": "esp32_test",
+		"timestamp": 200,
+		"status": "success",
+		"duration_ms": 2000,
+		"sensors_measured": ["temperature"],
+		"data": {"temperature": 27.35}
+	}`)
+
+	if err := svc.HandleSensorData(context.Background(), "esp32_test", payload); err != nil {
+		t.Fatalf("HandleSensorData failed: %v", err)
+	}
+
+	m, err := store.GetLatestMeasurement(context.Background(), "esp32_test")
+	if err != nil {
+		t.Fatalf("GetLatestMeasurement failed: %v", err)
+	}
+	if m == nil || m.Temperature == nil || *m.Temperature < 27.34 || *m.Temperature > 27.36 {
+		t.Fatalf("expected temperature ~27.35, got %v", m)
+	}
+}

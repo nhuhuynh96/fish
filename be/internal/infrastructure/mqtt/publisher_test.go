@@ -11,11 +11,12 @@ func TestExpandMeasureActions(t *testing.T) {
 		sensors []string
 		want    []string
 	}{
-		{name: "empty is all", sensors: nil, want: []string{"ph", "turb", "tds"}},
-		{name: "all", sensors: []string{"all"}, want: []string{"ph", "turb", "tds"}},
-		{name: "ui turbidity maps to turb", sensors: []string{"ph", "turbidity", "tds"}, want: []string{"ph", "turb", "tds"}},
-		{name: "temp ignored", sensors: []string{"temp", "ph"}, want: []string{"ph"}},
-		{name: "dedupe", sensors: []string{"ph", "ph", "turb"}, want: []string{"ph", "turb"}},
+		{name: "empty is all", sensors: nil, want: []string{"ph", "temp", "tds"}},
+		{name: "all", sensors: []string{"all"}, want: []string{"ph", "temp", "tds"}},
+		{name: "ui temp maps to temp", sensors: []string{"ph", "temperature", "tds"}, want: []string{"ph", "temp", "tds"}},
+		{name: "temp with ph", sensors: []string{"temp", "ph"}, want: []string{"temp", "ph"}},
+		{name: "turbidity ignored", sensors: []string{"ph", "turbidity"}, want: []string{"ph"}},
+		{name: "dedupe", sensors: []string{"ph", "ph", "temp"}, want: []string{"ph", "temp"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

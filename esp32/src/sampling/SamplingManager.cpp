@@ -2,6 +2,8 @@
 #include "../mqtt/MQTTHandler.h"
 #include "../config/ConfigManager.h"
 #include "../log/RemoteLog.h"
+#include <DallasTemperature.h>
+#include <OneWire.h>
 
 SamplingManager samplingManager;
 
@@ -18,16 +20,15 @@ void SamplingManager::begin() {
     pinMode(TDS_SENSOR_PIN, INPUT);
     analogReadResolution(12);
     analogSetPinAttenuation(TDS_SENSOR_PIN, ADC_11db);
-    pinMode(TURBIDITY_SENSOR_PIN, INPUT);
-    analogSetPinAttenuation(TURBIDITY_SENSOR_PIN, ADC_11db);
     pinMode(PH_SENSOR_PIN, INPUT);
     analogSetPinAttenuation(PH_SENSOR_PIN, ADC_11db);
     pinMode(PH_POWER_PIN, OUTPUT);
-    pinMode(TURBIDITY_POWER_PIN, OUTPUT);
+    pinMode(TEMP_POWER_PIN, OUTPUT);
+    pinMode(TEMP_DATA_PIN, INPUT);
     pinMode(TDS_POWER_PIN, OUTPUT);
     powerOffAllSensors();
     LOGLN("[Sampling] Relay GPIO18/19 | Phao 1 thấp=GPIO17 | Phao 2 cao=GPIO4");
-    LOGLN("[Sampling] Queue MQTT: ph|turb → phao 1 (đầy phao 2 thì xả xuống); tds → phao 2; inlet|drain");
+    LOGLN("[Sampling] Queue MQTT: ph → phao 1; tds → phao 2; temp GPIO27/33 không bơm; inlet|drain");
     LOGF("[Phao] lúc khởi động GPIO17=%d (%s) GPIO4=%d (%s)\n",
          digitalRead(FLOAT_LOW_PIN), isWaterLow() ? "phao1 ĐỦ" : "phao1 chưa",
          digitalRead(FLOAT_HIGH_PIN), isWaterHigh() ? "phao2 ĐỦ" : "phao2 chưa");
@@ -36,6 +37,7 @@ void SamplingManager::begin() {
 String SamplingManager::getStateName() const {
     if (isInletOn()) return "FILLING_WATER";
     if (isDrainOn()) return "DRAINING_WATER";
+    if (!testQueue.empty()) return "TESTING";
     if (!commandQueue.empty()) return "BUSY";
     return "IDLE";
 }
@@ -44,7 +46,6 @@ String SamplingManager::getSensorName(SensorType type) const {
     switch (type) {
         case SENSOR_TEMP: return "temperature";
         case SENSOR_PH: return "ph";
-        case SENSOR_TURBIDITY: return "turbidity";
         case SENSOR_TDS: return "tds";
         default: return "unknown";
     }
@@ -114,7 +115,7 @@ void SamplingManager::setDrainValve(bool enabled) {
 
 void SamplingManager::powerOffAllSensors() {
     digitalWrite(PH_POWER_PIN, SENSOR_POWER_OFF);
-    digitalWrite(TURBIDITY_POWER_PIN, SENSOR_POWER_OFF);
+    digitalWrite(TEMP_POWER_PIN, SENSOR_POWER_OFF);
     digitalWrite(TDS_POWER_PIN, SENSOR_POWER_OFF);
 }
 
@@ -129,9 +130,9 @@ void SamplingManager::setSensorPower(SensorType type, bool enabled) {
             pin = PH_POWER_PIN;
             name = "pH";
             break;
-        case SENSOR_TURBIDITY:
-            pin = TURBIDITY_POWER_PIN;
-            name = "turbidity";
+        case SENSOR_TEMP:
+            pin = TEMP_POWER_PIN;
+            name = "temperature";
             break;
         case SENSOR_TDS:
             pin = TDS_POWER_PIN;
@@ -143,6 +144,7 @@ void SamplingManager::setSensorPower(SensorType type, bool enabled) {
     digitalWrite(pin, enabled ? SENSOR_POWER_ON : SENSOR_POWER_OFF);
     LOGF("[Power] %s %s (GPIO%u)\n", name, enabled ? "BẬT" : "TẮT", pin);
     if (enabled) {
+        LOGF("[Power] %s chờ nguồn ổn định %lu ms\n", name, SENSOR_POWER_SETTLE_MS);
         delay(SENSOR_POWER_SETTLE_MS);
     }
 }
@@ -154,15 +156,27 @@ void SamplingManager::stopHardware() {
 }
 
 FillLevel SamplingManager::requiredLevel(const String &action, FillLevel parsed) const {
-    if (action == "ph" || action == "turb") return FILL_LEVEL_LOW;
+    if (action == "ph") return FILL_LEVEL_LOW;
     if (action == "tds") return FILL_LEVEL_HIGH;
     return parsed;
+}
+
+bool SamplingManager::isTestAction(const String &action) const {
+    return action == "test" || action == "test_ph" || action == "test_temp" ||
+           action == "test_temperature" || action == "test_tds";
 }
 
 void SamplingManager::enqueue(const PendingCommand &cmd) {
     PendingCommand next = cmd;
     next.action.toLowerCase();
     next.action.trim();
+    if (isTestAction(next.action)) {
+        testQueue.push(next);
+        LOGF("[Sampling] Test queue +%s (test=%u)\n",
+             next.action.c_str(), (unsigned)testQueue.size());
+        emitEvent("queued", "Đã xếp đo thử " + next.action + " (không bơm)");
+        return;
+    }
     next.fillLevel = requiredLevel(next.action, next.fillLevel);
     commandQueue.push(next);
     LOGF("[Sampling] Queue +%s level=%s (queue=%u)\n",
@@ -196,8 +210,9 @@ void SamplingManager::hanldeDrainOff() {
 }
 
 void SamplingManager::clearLocked(bool emit) {
-    size_t n = commandQueue.size();
+    size_t n = commandQueue.size() + testQueue.size();
     while (!commandQueue.empty()) commandQueue.pop();
+    while (!testQueue.empty()) testQueue.pop();
     inletAttempt = 0;
     stopHardware();
     if (emit) {
@@ -384,8 +399,9 @@ void SamplingManager::processHead() {
         if (measureAfterFill(FILL_LEVEL_LOW, SENSOR_PH)) finishCommand();
         return;
     }
-    if (action == "turb") {
-        if (measureAfterFill(FILL_LEVEL_LOW, SENSOR_TURBIDITY)) finishCommand();
+    if (action == "temp" || action == "temperature") {
+        measureTemperature();
+        finishCommand();
         return;
     }
     if (action == "tds") {
@@ -396,9 +412,91 @@ void SamplingManager::processHead() {
     finishCommand();
 }
 
+void SamplingManager::processTestHead() {
+    if (testQueue.empty()) return;
+
+    PendingCommand cmd = testQueue.front();
+    testQueue.pop();
+    String action = cmd.action;
+    LOGLN("[Test] " + action + " — đo thẳng, không bơm, không phao");
+
+    if (action == "test") {
+        measureSensor(SENSOR_PH);
+        measureTemperature();
+        measureSensor(SENSOR_TDS);
+        emitEvent("test_done", "Đã đo thử pH, nhiệt độ, TDS.");
+        return;
+    }
+    if (action == "test_ph") {
+        measureSensor(SENSOR_PH);
+        return;
+    }
+    if (action == "test_temp" || action == "test_temperature") {
+        measureTemperature();
+        return;
+    }
+    if (action == "test_tds") {
+        measureSensor(SENSOR_TDS);
+        return;
+    }
+    emitEvent("command_error", "test action không hỗ trợ: " + action);
+}
+
 void SamplingManager::handle() {
+    while (!testQueue.empty()) {
+        processTestHead();
+    }
     handlePump();
     processHead();
+}
+
+float SamplingManager::readWaterTempC() {
+    OneWire oneWire(TEMP_DATA_PIN);
+    DallasTemperature probe(&oneWire);
+    probe.begin();
+    if (probe.getDeviceCount() == 0) return NAN;
+    // Không hỏi bit "đã đo xong": lúc vừa cấp nguồn dây vẫn cao, thư viện bỏ qua
+    // 750 ms và trả 85°C — giá trị mặc định trong bộ nhớ DS18B20.
+    probe.setWaitForConversion(false);
+    probe.requestTemperatures();
+    delay(800);
+    float celsius = probe.getTempCByIndex(0);
+    if (celsius == DEVICE_DISCONNECTED_C) return NAN;
+    return celsius;
+}
+
+void SamplingManager::measureTemperature() {
+    measureStartedAt = millis();
+    setSensorPower(SENSOR_TEMP, true);
+    float celsius = readWaterTempC();
+    setSensorPower(SENSOR_TEMP, false);
+    if (isnan(celsius)) {
+        LOGLN("[Temp] Không đọc được DS18B20 (GPIO27)");
+        emitEvent("command_error", "Không đọc được DS18B20");
+        return;
+    }
+    LOGF("[Temp] %.2f C\n", celsius);
+    publishTemperature(celsius);
+}
+
+void SamplingManager::publishTemperature(float celsius) {
+    unsigned long durationMs = millis() - measureStartedAt;
+    String payload = "{";
+    payload += "\"device_id\":\"" + currentConfig.device_id + "\",";
+    payload += "\"timestamp\":" + String(millis() / 1000) + ",";
+    payload += "\"status\":\"success\",";
+    payload += "\"duration_ms\":" + String(durationMs) + ",";
+    payload += "\"sensors_measured\":[\"temperature\"],";
+    payload += "\"data\":{\"temperature\":" + String(celsius, 2) + "}";
+    payload += "}";
+
+    LOGLN("\n[Sampling] >>> GỬI sensor_data <<<");
+    LOGLN(payload);
+    if (mqttHandler.isConnected()) {
+        mqttHandler.publish("sensor_data", payload);
+    }
+    String extra = "\"sensor\":\"temperature\",\"celsius\":" + String(celsius, 2);
+    emitEvent("measuring_sensor", "Đã đo nhiệt độ " + String(celsius, 2) + " C, đã gửi MQTT.", extra);
 }
 
 void SamplingManager::measureSensor(SensorType type) {
@@ -408,10 +506,6 @@ void SamplingManager::measureSensor(SensorType type) {
         setSensorPower(SENSOR_PH, true);
         raw = readRawADC(PH_SENSOR_PIN, PH_SAMPLE_COUNT);
         setSensorPower(SENSOR_PH, false);
-    } else if (type == SENSOR_TURBIDITY) {
-        setSensorPower(SENSOR_TURBIDITY, true);
-        raw = readRawADC(TURBIDITY_SENSOR_PIN, TURBIDITY_SAMPLE_COUNT);
-        setSensorPower(SENSOR_TURBIDITY, false);
     } else if (type == SENSOR_TDS) {
         setSensorPower(SENSOR_TDS, true);
         raw = readRawADC(TDS_SENSOR_PIN, TDS_SAMPLE_COUNT);

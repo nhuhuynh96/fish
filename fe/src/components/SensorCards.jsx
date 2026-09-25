@@ -4,13 +4,11 @@ const EEL_FALLBACK = {
   thresholds: {
     temp_min: 26, temp_max: 32,
     ph_min: 7.0, ph_max: 8.5,
-    turbidity_warn: 25, turbidity_max: 50,
     tds_min: 100, tds_max: 800,
   },
   badges: {
     temperature: { ok: 'Lý tưởng chình (26–32°C)', low: 'Hơi lạnh (<26°C)', high: 'Nóng (>32°C)' },
     ph: { ok: 'Chuẩn hồ chình (7.0–8.5)', low: 'Nhiễm axit (<7.0)', high: 'Nhiễm kiềm (>8.5)' },
-    turbidity: { ok: 'Nước trong (<25 NTU)', warn: 'Hơi đục (25–50 NTU)', high: 'Nước đục cao (>50 NTU)' },
     tds: { ok: 'Khoáng hồ chình (100–800 ppm)', low: 'Khoáng thấp (<100 ppm)', high: 'Khoáng/TDS cao (>800 ppm)' },
   },
 };
@@ -25,7 +23,6 @@ export default function SensorCards({ measurement, pondConfig }) {
 
   const temp = measurement?.temperature;
   const ph = measurement?.ph;
-  const turb = measurement?.turbidity;
   const tds = measurement?.tds;
 
   const getTempStatus = (val) => {
@@ -40,13 +37,6 @@ export default function SensorCards({ measurement, pondConfig }) {
     if (val >= th.ph_min && val <= th.ph_max) return { text: badges.ph.ok, cls: 'badge-ideal' };
     if (val < th.ph_min) return { text: badges.ph.low, cls: 'badge-danger' };
     return { text: badges.ph.high, cls: 'badge-warning' };
-  };
-
-  const getTurbStatus = (val) => {
-    if (val === undefined || val === null) return waiting();
-    if (val < th.turbidity_warn) return { text: badges.turbidity.ok, cls: 'badge-ideal' };
-    if (val <= th.turbidity_max) return { text: badges.turbidity.warn || badges.turbidity.high, cls: 'badge-warning' };
-    return { text: badges.turbidity.high, cls: 'badge-danger' };
   };
 
   const getTdsStatus = (val) => {
@@ -82,20 +72,6 @@ export default function SensorCards({ measurement, pondConfig }) {
       icon: (
         <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
           <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z" />
-        </svg>
-      ),
-    },
-    {
-      title: 'Độ Đục Của Nước',
-      value: turb !== undefined && turb !== null ? turb.toFixed(1) : '--',
-      unit: 'NTU',
-      status: getTurbStatus(turb),
-      iconBg: 'rgba(56, 189, 248, 0.15)',
-      iconColor: '#38bdf8',
-      gradient: 'linear-gradient(90deg, #38bdf8, #0284c7)',
-      icon: (
-        <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" />
         </svg>
       ),
     },

@@ -17,7 +17,6 @@ export default function HistoryTable({ history }) {
               <th>Thời Gian</th>
               <th>Nhiệt Độ (°C)</th>
               <th>Độ pH</th>
-              <th>Độ Đục (NTU)</th>
               <th>TDS (ppm)</th>
               <th>Thời Gian Đo</th>
               <th>Trạng Thái</th>
@@ -44,11 +43,6 @@ export default function HistoryTable({ history }) {
                     <td style={{ color: '#34d399', fontWeight: 600 }}>
                       {h.ph !== undefined && h.ph !== null ? h.ph.toFixed(2) : '-'}
                     </td>
-                    <td style={{ color: '#38bdf8', fontWeight: 600 }}>
-                      {h.turbidity !== undefined && h.turbidity !== null
-                        ? `${h.turbidity.toFixed(1)} NTU`
-                        : '-'}
-                    </td>
                     <td style={{ color: '#818cf8', fontWeight: 600 }}>
                       {h.tds !== undefined && h.tds !== null
                         ? `${Math.round(h.tds)} ppm`
@@ -73,7 +67,7 @@ export default function HistoryTable({ history }) {
               })
             ) : (
               <tr>
-                <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '30px' }}>
+                <td colSpan="6" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '30px' }}>
                   Chưa có dữ liệu lịch sử. Các lần lấy mẫu hoàn tất sẽ hiển thị tại đây.
                 </td>
               </tr>

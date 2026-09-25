@@ -49,7 +49,7 @@ static FillLevel parseCommandLevel(JsonDocument &doc) {
     return FILL_LEVEL_LOW;
 }
 
-// {"action":"ph"|"turb"|"tds"|"inlet_on"|"inlet_off"|"drain_on"|"drain_off","level":1|2}
+// {"action":"ph"|"temp"|"tds"|"test"|"test_ph"|"test_temp"|"test_tds"|"inlet_on"|"inlet_off"|"drain_on"|"drain_off","level":1|2}
 void handleMqttCommand(const String &msg) {
     String payload = msg;
     payload.trim();

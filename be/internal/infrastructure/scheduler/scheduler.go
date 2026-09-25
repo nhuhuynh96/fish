@@ -181,10 +181,6 @@ func (s *Scheduler) checkAndTrigger(now time.Time) {
 			dueSensors = append(dueSensors, "ph")
 			sched.lastPhRun = now
 		}
-		if sched.TurbInterval > 0 && now.Sub(sched.lastTurbRun) >= sched.TurbInterval {
-			dueSensors = append(dueSensors, "turbidity")
-			sched.lastTurbRun = now
-		}
 		if sched.TdsInterval > 0 && now.Sub(sched.lastTdsRun) >= sched.TdsInterval {
 			dueSensors = append(dueSensors, "tds")
 			sched.lastTdsRun = now

@@ -59,14 +59,9 @@ func pct(v int) *int { return &v }
 func applyRules(res *Result) {
 	th := res.Thresholds
 	trend := res.Trend
-	hasFilter := false
-	if res.Profile.HasFilter != nil {
-		hasFilter = *res.Profile.HasFilter
-	}
 
 	ph := trend["ph"]
 	tds := trend["tds"]
-	turb := trend["turbidity"]
 	temp := trend["temperature"]
 	do := trend["do"]
 	tan := trend["tan"]
@@ -75,7 +70,6 @@ func applyRules(res *Result) {
 	res.Findings = []Finding{
 		findingFor("temperature", "Nhiệt độ", temp, th.TempMin, th.TempMax, "°C"),
 		findingFor("ph", "pH", ph, th.PHMin, th.PHMax, ""),
-		findingForTurbidity(turb, th.TurbidityWarn, th.TurbidityMax),
 		findingFor("tds", "TDS", tds, th.TDSMin, th.TDSMax, "ppm"),
 		findingFor("do", "Oxy (kit)", do, th.DOMin, 20, "mg/L"),
 		findingForTAN(tan, th.TANWarn, th.TANMax),
@@ -114,8 +108,6 @@ func applyRules(res *Result) {
 	phHigh := ph.Current != nil && *ph.Current > th.PHMax
 	tdsHigh := tds.Current != nil && *tds.Current > th.TDSMax
 	tdsLow := tds.Current != nil && *tds.Current < th.TDSMin
-	turbHigh := turb.Current != nil && *turb.Current > th.TurbidityWarn
-	turbDanger := turb.Current != nil && *turb.Current > th.TurbidityMax
 	tempHigh := temp.Current != nil && *temp.Current > th.TempMax
 	tempLow := temp.Current != nil && *temp.Current < th.TempMin
 	doLow := do.Current != nil && *do.Current < th.DOMin
@@ -125,12 +117,10 @@ func applyRules(res *Result) {
 	nh3Danger := nh3.Current != nil && *nh3.Current > th.NH3FreeMax
 
 	worseningWater := (phLow && ph.Slope == "falling") ||
-		(tdsHigh && tds.Slope == "rising") ||
-		(turbHigh && (turb.Slope == "rising" || turb.Slope == "stable"))
+		(tdsHigh && tds.Slope == "rising")
 
 	improvingPH := phLow && ph.Slope == "rising"
 	improvingTDS := tdsHigh && tds.Slope == "falling"
-	improvingTurb := turbHigh && turb.Slope == "falling"
 
 	if tempHigh || doLow {
 		detail := "Nước nóng làm giảm oxy. Hạ nhiệt từ từ (quạt mặt nước, giảm đèn), tăng sục khí. Không đổ đá trực tiếp vào hồ."
@@ -155,27 +145,23 @@ func applyRules(res *Result) {
 		})
 	}
 
-	needChange := turbDanger || (turbHigh && turb.Slope == "rising") ||
-		(tdsHigh && tds.Slope == "rising") ||
+	needChange := (tdsHigh && tds.Slope == "rising") ||
 		(phLow && (tdsHigh || tds.Slope == "rising")) ||
 		(phHigh && ph.Slope != "falling") ||
 		tanDanger || nh3Danger || (nh3High && tanHigh)
 
 	if needChange {
 		amount := 20
-		if turbDanger || (ph.Current != nil && (*ph.Current < th.PHMin-0.3 || *ph.Current > th.PHMax+0.4)) ||
+		if (ph.Current != nil && (*ph.Current < th.PHMin-0.3 || *ph.Current > th.PHMax+0.4)) ||
 			(tds.Current != nil && *tds.Current > th.TDSMax+140) {
 			amount = 30
 		}
-		if improvingPH && improvingTDS && improvingTurb && !turbDanger {
+		if improvingPH && improvingTDS {
 			amount = 15
 		}
-		detail := "Thay nước đã khử chlorine, cùng nhiệt độ. Ưu tiên thay nước hơn đổ hóa chất khi pH/TDS/độ đục đang xấu đi cùng lúc."
+		detail := "Thay nước đã khử chlorine, cùng nhiệt độ. Ưu tiên thay nước hơn đổ hóa chất khi pH và TDS đang xấu đi cùng lúc."
 		if phLow && tdsHigh {
 			detail = "pH thấp đi kèm TDS cao: thường do hữu cơ tích tụ. Thay nước xử lý cả hai; không tăng pH bằng baking soda (TDS sẽ còn tăng)."
-		}
-		if turbHigh && tdsHigh {
-			detail = "Độ đục và TDS cùng tăng: giảm cho ăn, hút cặn, thay nước. Kiểm tra lọc cơ học."
 		}
 		if tanDanger || nh3Danger {
 			detail = "Amonia kit cao: thay nước ngay (đã khử chlorine, cùng nhiệt), ngưng cho ăn, tăng sục khí. Không dùng ammonia lock thay cho thay nước."
@@ -190,20 +176,8 @@ func applyRules(res *Result) {
 		})
 	}
 
-	if turbHigh {
-		filterMsg := "Vệ sinh bể lắng/lọc, hút cặn đáy. Sục khí không thay được lọc."
-		if !hasFilter {
-			filterMsg = "Hồ không có hệ thống lọc — hút cặn, thay nước, tăng sục khí. Lọc ở đây là bể lọc/lắng, không phải máy sục."
-		}
-		actions = append(actions, Action{
-			Type:   "check_filter",
-			Title:  "Kiểm tra lọc và hút cặn",
-			Detail: filterMsg,
-		})
-	}
-
-	if (tdsHigh && tds.Slope != "falling") || (turbHigh && tds.Slope == "rising") || tanHigh || nh3High {
-		feedDetail := "TDS/độ đục tăng thường do thức ăn thừa. Cho ăn ít hơn, vớt thức ăn không ăn hết."
+	if (tdsHigh && tds.Slope != "falling") || tanHigh || nh3High {
+		feedDetail := "TDS tăng thường do thức ăn thừa. Cho ăn ít hơn, vớt thức ăn không ăn hết."
 		if tanHigh || nh3High {
 			feedDetail = "Amonia từ kit đang cao: ngưng hoặc giảm mạnh cho ăn 1–2 ngày, vớt thức ăn thừa, tăng sục khí."
 		}
@@ -248,7 +222,7 @@ func applyRules(res *Result) {
 	if phLow && tdsHigh {
 		doNot = append(doNot, "Không đổ baking soda / pH Up khi TDS đang cao.")
 	}
-	if improvingPH || improvingTDS || improvingTurb {
+	if improvingPH || improvingTDS {
 		doNot = append(doNot, "Chỉ số đang về vùng tốt — đừng chồng thêm hóa chất hôm nay.")
 	}
 	if nh3Danger || tanDanger {
@@ -280,7 +254,7 @@ func applyRules(res *Result) {
 	}
 	res.Actions = actions
 	res.DoNot = doNot
-	res.Summary = ruleSummary(res, phLow, tdsHigh, turbHigh, improvingPH, improvingTDS, improvingTurb, doLow, nh3High || tanHigh)
+	res.Summary = ruleSummary(res, phLow, tdsHigh, improvingPH, improvingTDS, doLow, nh3High || tanHigh)
 }
 
 func isDanger(f Finding, th Thresholds) bool {
@@ -291,8 +265,6 @@ func isDanger(f Finding, th Thresholds) bool {
 	switch f.Metric {
 	case "ph":
 		return v < th.PHMin-0.3 || v > th.PHMax+0.4
-	case "turbidity":
-		return v > th.TurbidityMax
 	case "tds":
 		return v > th.TDSMax+140 || v < th.TDSMin-60
 	case "temperature":
@@ -317,8 +289,6 @@ func driftingAway(f Finding, th Thresholds) bool {
 		return (v <= th.PHMin+0.15 && f.Slope == "falling") || (v >= th.PHMax-0.15 && f.Slope == "rising")
 	case "tds":
 		return (v >= th.TDSMax-20 && f.Slope == "rising") || (v <= th.TDSMin+20 && f.Slope == "falling")
-	case "turbidity":
-		return v >= th.TurbidityWarn-3 && f.Slope == "rising"
 	case "temperature":
 		return (v >= th.TempMax-0.5 && f.Slope == "rising") || (v <= th.TempMin+0.5 && f.Slope == "falling")
 	}
@@ -391,30 +361,6 @@ func findingForNH3(tr MetricTrend, warn, danger float64) Finding {
 	return f
 }
 
-func findingForTurbidity(tr MetricTrend, warn, danger float64) Finding {
-	f := Finding{Metric: "turbidity", Value: tr.Current, Target: [2]float64{0, warn}, Slope: tr.Slope, Status: "missing"}
-	if tr.Current == nil {
-		f.Label = "Chưa có mẫu độ đục"
-		return f
-	}
-	v := *tr.Current
-	switch {
-	case v > danger:
-		f.Status = "high"
-		f.Label = fmt.Sprintf("Nước đục cao (%.1f NTU)", v)
-	case v > warn:
-		f.Status = "high"
-		f.Label = fmt.Sprintf("Hơi đục (%.1f NTU)", v)
-	default:
-		f.Status = "ok"
-		f.Label = fmt.Sprintf("Nước trong (%.1f NTU)", v)
-	}
-	if tr.Slope == "rising" || tr.Slope == "falling" {
-		f.Label += slopeHint(tr.Slope)
-	}
-	return f
-}
-
 func unitSpace(unit string) string {
 	if unit == "" {
 		return ""
@@ -432,7 +378,7 @@ func slopeHint(slope string) string {
 	return ""
 }
 
-func ruleSummary(res *Result, phLow, tdsHigh, turbHigh, improvingPH, improvingTDS, improvingTurb, doLow, ammoniaHigh bool) string {
+func ruleSummary(res *Result, phLow, tdsHigh, improvingPH, improvingTDS, doLow, ammoniaHigh bool) string {
 	if ammoniaHigh {
 		return "Amonia từ test kit đang cao (TAN và/hoặc NH₃ tự do). Ưu tiên thay nước, ngưng cho ăn, tăng sục khí trước các chỉ số khác."
 	}
@@ -445,17 +391,11 @@ func ruleSummary(res *Result, phLow, tdsHigh, turbHigh, improvingPH, improvingTD
 	if res.Overall == "ok" {
 		return "Các chỉ số trong ngưỡng và không xấu đi rõ. Giữ lịch đo, chưa cần can thiệp."
 	}
-	if improvingPH && improvingTDS && improvingTurb {
-		return "Hồ đang xấu nhưng xu hướng đang cải thiện. Ưu tiên theo dõi, thay nước nhẹ nếu vẫn đục/TDS cao — tránh chồng hóa chất."
-	}
-	if phLow && tdsHigh && turbHigh {
-		return "pH thấp, TDS và độ đục cùng cao/đang tăng: ưu tiên thay nước và giảm cho ăn, không tăng pH bằng hóa chất."
+	if improvingPH && improvingTDS {
+		return "Hồ đang xấu nhưng xu hướng đang cải thiện. Ưu tiên theo dõi, thay nước nhẹ nếu TDS vẫn cao — tránh chồng hóa chất."
 	}
 	if phLow && tdsHigh {
 		return "pH thấp đi kèm TDS cao: thay nước từng phần, đừng dùng baking soda."
-	}
-	if turbHigh && tdsHigh {
-		return "Nước đục và TDS cao: thay nước, hút cặn, kiểm tra lọc, giảm cho ăn."
 	}
 	if phLow {
 		return "pH đang thấp. Nếu khoáng không cao có thể tăng KH rất chậm; nếu TDS đang tăng thì chỉ thay nước."

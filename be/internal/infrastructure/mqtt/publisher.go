@@ -68,12 +68,12 @@ func expandMeasureActions(sensors []string) []string {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "all", "tat_ca":
 			add("ph")
-			add("turb")
+			add("temp")
 			add("tds")
 		case "ph":
 			add("ph")
-		case "turbidity", "turb", "do_duc", "do_can":
-			add("turb")
+		case "temp", "temperature", "nhiet_do":
+			add("temp")
 		case "tds", "chat_ran", "chat_luong":
 			add("tds")
 		}

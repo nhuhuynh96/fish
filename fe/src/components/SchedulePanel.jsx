@@ -5,7 +5,6 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [tempInterval, setTempInterval] = useState(60);
   const [phInterval, setPhInterval] = useState(120);
-  const [turbInterval, setTurbInterval] = useState(180);
   const [tdsInterval, setTdsInterval] = useState(300);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -22,7 +21,6 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
         setAutoEnabled(!!sched.auto_enabled);
         if (sched.temp_interval > 0) setTempInterval(sched.temp_interval);
         if (sched.ph_interval > 0) setPhInterval(sched.ph_interval);
-        if (sched.turb_interval > 0) setTurbInterval(sched.turb_interval);
         if (sched.tds_interval > 0) setTdsInterval(sched.tds_interval);
       } catch (e) {
         console.error('Load schedule error:', e);
@@ -34,10 +32,9 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
     return () => { active = false; };
   }, [deviceId]);
 
-  const applyPreset = (temp, ph, turb, tds) => {
+  const applyPreset = (temp, ph, tds) => {
     setTempInterval(temp);
     setPhInterval(ph);
-    setTurbInterval(turb);
     setTdsInterval(tds);
   };
 
@@ -50,7 +47,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
         autoEnabled,
         tempInterval: Number(tempInterval),
         phInterval: Number(phInterval),
-        turbInterval: Number(turbInterval),
+        turbInterval: 0,
         tdsInterval: Number(tdsInterval),
       });
       setSaveSuccess(true);
@@ -119,7 +116,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
       </div>
 
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Auto: backend gửi <b>ph / turb / tds</b> khi đến hạn. ESP bơm đúng phao, đo, hết queue xả 30s.
+        Auto: backend gửi <b>nhiệt độ / pH / TDS</b> khi đến hạn. pH và TDS bơm đúng phao; nhiệt độ đo thẳng.
       </p>
 
       <div style={{ marginBottom: '16px' }}>
@@ -129,25 +126,25 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(60, 120, 180, 300)}
+            onClick={() => applyPreset(60, 120, 300)}
           >
-            ⏱️ Tiêu chuẩn (1p - 2p - 3p - 5p)
+            ⏱️ Tiêu chuẩn (1p - 2p - 5p)
           </button>
           <button
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(15, 30, 45, 60)}
+            onClick={() => applyPreset(15, 30, 60)}
           >
-            ⚡ Test Nhanh (15s - 30s - 45s - 60s)
+            ⚡ Test Nhanh (15s - 30s - 60s)
           </button>
           <button
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(300, 600, 900, 1800)}
+            onClick={() => applyPreset(300, 600, 1800)}
           >
-            🔋 Tiết kiệm (5p - 10p - 15p - 30p)
+            🔋 Tiết kiệm (5p - 10p - 30p)
           </button>
         </div>
       </div>
@@ -207,30 +204,6 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
               }}
             />
             <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>≈ {Math.round(phInterval / 60 * 10) / 10} phút</span>
-          </div>
-
-          <div className="form-group" style={{ margin: 0 }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
-              🌊 Độ đục (giây)
-            </label>
-            <input
-              type="number"
-              min="5"
-              step="5"
-              value={turbInterval}
-              onChange={(e) => setTurbInterval(e.target.value)}
-              className="form-input"
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                borderRadius: '8px',
-                background: 'rgba(15, 23, 42, 0.6)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                color: '#fff',
-                fontSize: '13px',
-              }}
-            />
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>≈ {Math.round(turbInterval / 60 * 10) / 10} phút</span>
           </div>
 
           <div className="form-group" style={{ margin: 0 }}>

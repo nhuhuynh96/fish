@@ -68,7 +68,7 @@ func (s *Service) SetNarrator(n advice.Narrator) {
 	s.narrator = n
 }
 
-// 1. Gửi từng action đo (ph / turbidity / tds) — ESP tự bơm tới phao tương ứng.
+// 1. Gửi từng action đo (ph / temp / tds). pH và TDS tự bơm tới phao; nhiệt độ đo thẳng.
 func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, sensors []string) error {
 	if len(sensors) == 0 {
 		sensors = []string{"all"}
