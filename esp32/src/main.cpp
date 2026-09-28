@@ -49,7 +49,7 @@ static FillLevel parseCommandLevel(JsonDocument &doc) {
     return FILL_LEVEL_LOW;
 }
 
-// {"action":"ph"|"temp"|"tds"|"test"|"test_ph"|"test_temp"|"test_tds"|"inlet_on"|"inlet_off"|"drain_on"|"drain_off","level":1|2}
+// {"action":"inlet_on"|"inlet_off"|"drain_on"|"drain_off"|"level"|"clear_queue","level":1|2}
 void handleMqttCommand(const String &msg) {
     String payload = msg;
     payload.trim();
@@ -57,7 +57,7 @@ void handleMqttCommand(const String &msg) {
 
     JsonDocument doc;
     if (deserializeJson(doc, payload)) {
-        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"ph\"} hoặc {\"action\":\"inlet\",\"level\":1}");
+        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"inlet_on\",\"level\":1}");
         return;
     }
 
@@ -66,6 +66,11 @@ void handleMqttCommand(const String &msg) {
     action.trim();
     if (action.length() == 0) {
         publishCommandError("Thiếu action.");
+        return;
+    }
+
+    if (action == "level") {
+        samplingManager.publishWaterLevel();
         return;
     }
 
@@ -192,7 +197,6 @@ void loop() {
     // Đẩy Serial log đã xếp hàng lên MQTT topic fish/<id>/log
     remoteLog.handle();
 
-    // Xử lý máy trạng thái lấy mẫu & đo chỉ số (Bơm -> Đo tuần tự -> Xả)
     samplingManager.handle();
 
     // Gửi tin nhắn định kỳ (Heartbeat telemetry) mỗi 30 giây
