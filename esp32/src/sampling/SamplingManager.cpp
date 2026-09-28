@@ -2,8 +2,6 @@
 #include "../mqtt/MQTTHandler.h"
 #include "../config/ConfigManager.h"
 #include "../log/RemoteLog.h"
-#include <DallasTemperature.h>
-#include <OneWire.h>
 
 SamplingManager samplingManager;
 
@@ -17,18 +15,12 @@ void SamplingManager::begin() {
     digitalWrite(DRAIN_VALVE_PIN, PUMP_OFF_LEVEL);
     pinMode(FLOAT_HIGH_PIN, INPUT_PULLUP);
     pinMode(FLOAT_LOW_PIN, INPUT_PULLUP);
-    pinMode(TDS_SENSOR_PIN, INPUT);
-    analogReadResolution(12);
-    analogSetPinAttenuation(TDS_SENSOR_PIN, ADC_11db);
-    pinMode(PH_SENSOR_PIN, INPUT);
-    analogSetPinAttenuation(PH_SENSOR_PIN, ADC_11db);
-    pinMode(PH_POWER_PIN, OUTPUT);
-    pinMode(TEMP_POWER_PIN, OUTPUT);
-    pinMode(TEMP_DATA_PIN, INPUT);
-    pinMode(TDS_POWER_PIN, OUTPUT);
-    powerOffAllSensors();
-    LOGLN("[Sampling] Relay GPIO18/19 | Phao 1 thấp=GPIO17 | Phao 2 cao=GPIO4");
-    LOGLN("[Sampling] Queue MQTT: ph → phao 1; tds → phao 2; temp GPIO27/33 không bơm; inlet|drain");
+
+    // Khởi tạo UART2 kết nối với ESP32-S3 (TinyGo Sensor Node)
+    Serial2.begin(115200, SERIAL_8N1, S3_UART_RX_PIN, S3_UART_TX_PIN);
+
+    LOGLN("[Sampling] Relay Bơm=GPIO18 | Van Xả=GPIO19 | Phao1=GPIO17 | Phao2=GPIO4");
+    LOGF("[Sampling] UART Bridge ESP32-S3: RX=GPIO%d, TX=GPIO%d (115200 Baud)\n", S3_UART_RX_PIN, S3_UART_TX_PIN);
     LOGF("[Phao] lúc khởi động GPIO17=%d (%s) GPIO4=%d (%s)\n",
          digitalRead(FLOAT_LOW_PIN), isWaterLow() ? "phao1 ĐỦ" : "phao1 chưa",
          digitalRead(FLOAT_HIGH_PIN), isWaterHigh() ? "phao2 ĐỦ" : "phao2 chưa");
@@ -37,18 +29,10 @@ void SamplingManager::begin() {
 String SamplingManager::getStateName() const {
     if (isInletOn()) return "FILLING_WATER";
     if (isDrainOn()) return "DRAINING_WATER";
+    if (waitingForS3Response) return "MEASURING_SENSORS";
     if (!testQueue.empty()) return "TESTING";
     if (!commandQueue.empty()) return "BUSY";
     return "IDLE";
-}
-
-String SamplingManager::getSensorName(SensorType type) const {
-    switch (type) {
-        case SENSOR_TEMP: return "temperature";
-        case SENSOR_PH: return "ph";
-        case SENSOR_TDS: return "tds";
-        default: return "unknown";
-    }
 }
 
 const char *SamplingManager::fillLevelName(FillLevel level) const {
@@ -113,46 +97,10 @@ void SamplingManager::setDrainValve(bool enabled) {
     LOGLN(enabled ? "[Valve] BẬT van xả (GPIO19)" : "[Valve] TẮT van xả (GPIO19)");
 }
 
-void SamplingManager::powerOffAllSensors() {
-    digitalWrite(PH_POWER_PIN, SENSOR_POWER_OFF);
-    digitalWrite(TEMP_POWER_PIN, SENSOR_POWER_OFF);
-    digitalWrite(TDS_POWER_PIN, SENSOR_POWER_OFF);
-}
-
-void SamplingManager::setSensorPower(SensorType type, bool enabled) {
-    if (enabled) {
-        powerOffAllSensors();
-    }
-    uint8_t pin = 0;
-    const char *name = "";
-    switch (type) {
-        case SENSOR_PH:
-            pin = PH_POWER_PIN;
-            name = "pH";
-            break;
-        case SENSOR_TEMP:
-            pin = TEMP_POWER_PIN;
-            name = "temperature";
-            break;
-        case SENSOR_TDS:
-            pin = TDS_POWER_PIN;
-            name = "tds";
-            break;
-        default:
-            return;
-    }
-    digitalWrite(pin, enabled ? SENSOR_POWER_ON : SENSOR_POWER_OFF);
-    LOGF("[Power] %s %s (GPIO%u)\n", name, enabled ? "BẬT" : "TẮT", pin);
-    if (enabled) {
-        LOGF("[Power] %s chờ nguồn ổn định %lu ms\n", name, SENSOR_POWER_SETTLE_MS);
-        delay(SENSOR_POWER_SETTLE_MS);
-    }
-}
-
 void SamplingManager::stopHardware() {
     setInletPump(false);
     setDrainValve(false);
-    powerOffAllSensors();
+    waitingForS3Response = false;
 }
 
 FillLevel SamplingManager::requiredLevel(const String &action, FillLevel parsed) const {
@@ -163,7 +111,7 @@ FillLevel SamplingManager::requiredLevel(const String &action, FillLevel parsed)
 
 bool SamplingManager::isTestAction(const String &action) const {
     return action == "test" || action == "test_ph" || action == "test_temp" ||
-           action == "test_temperature" || action == "test_tds";
+           action == "test_temperature" || action == "test_tds" || action == "measure_all";
 }
 
 void SamplingManager::enqueue(const PendingCommand &cmd) {
@@ -226,13 +174,6 @@ void SamplingManager::applyHeadFillLevel() {
     fillLevel = requiredLevel(head.action, head.fillLevel);
 }
 
-void SamplingManager::startInlet() {
-    setInletPump(true);
-    inletSince = millis();
-    if (inletAttempt == 0) inletAttempt = 1;
-    emitEvent("manual_pump", String("Bơm nạp: BẬT (") + fillLevelName(fillLevel) + ")");
-}
-
 void SamplingManager::hanldeInletOn(FillLevel level) {
     if (isInletOn()) {
         emitEvent("manual_pump", "Bơm nạp đã bật. Không bơm nữa.");
@@ -246,9 +187,6 @@ void SamplingManager::hanldeInletOn(FillLevel level) {
     }
     if (level == FILL_LEVEL_HIGH) {
         if (isWaterHigh()) {
-            // setInletPump(false);ß
-            // inletAttempt = 0;
-            // inletSince = 0;
             emitEvent("manual_pump", "Đủ phao 2. Không bơm nữa.");
             return;
         }
@@ -265,31 +203,70 @@ void SamplingManager::hanldeDrainOn() {
         emitEvent("draining", "Van xả đã bật. Không xả nữa.");
         return;
     }
-    // if (isWaterLow()) {
-    //     emitEvent("draining", "Đủ phao 1. Không xả nữa.");
-    //     return;
-    // }
     setDrainValve(true);
     drainSince = millis();
     emitEvent("draining", "Van xả: BẬT");
+}
+
+void SamplingManager::sendS3Command(const String &action) {
+    measureStartedAt = millis();
+    waitingForS3Response = true;
+    s3RequestTimeout = millis();
+    LOGF("[UART -> S3] Gửi lệnh: CMD:%s\n", action.c_str());
+    Serial2.printf("CMD:%s\n", action.c_str());
+}
+
+void SamplingManager::handleS3Incoming() {
+    while (Serial2.available()) {
+        String line = Serial2.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) continue;
+
+        LOGF("[UART <- S3] %s\n", line.c_str());
+
+        if (line.startsWith("DATA:")) {
+            String jsonPayload = line.substring(5);
+            LOGLN("\n[Sampling] >>> NHẬN sensor_data TỪ ESP32-S3 <<<");
+            LOGLN(jsonPayload);
+
+            if (mqttHandler.isConnected()) {
+                mqttHandler.publish("sensor_data", jsonPayload);
+            }
+            emitEvent("measuring_sensor", "Đã nhận kết quả đo từ ESP32-S3, đã gửi MQTT.");
+            waitingForS3Response = false;
+            finishCommand();
+        } else if (line.startsWith("EVENT:")) {
+            String eventJson = line.substring(6);
+            emitEvent("s3_event", "ESP32-S3 Event", eventJson);
+        } else if (line.startsWith("ERROR:")) {
+            String errJson = line.substring(6);
+            emitEvent("s3_error", "ESP32-S3 Báo lỗi", errJson);
+            waitingForS3Response = false;
+            finishCommand();
+        }
+    }
+
+    // Kiểm tra timeout nếu S3 không phản hồi
+    if (waitingForS3Response && (millis() - s3RequestTimeout > S3_RESPONSE_TIMEOUT_MS)) {
+        LOGLN("[UART S3] Quá thời gian chờ phản hồi từ ESP32-S3!");
+        emitEvent("command_error", "ESP32-S3 Timeout không phản hồi đo!");
+        waitingForS3Response = false;
+        finishCommand();
+    }
 }
 
 void SamplingManager::handlePump() {
     applyHeadFillLevel();
     unsigned long now = millis();
     unsigned long onFor = now - inletSince;
+
     if (isInletOn()) {
-        // 1s đầu: nhiễu inrush, không tin phao. Sau đó phải ACTIVE ổn định 800ms.
         if (onFor < PUMP_FLOAT_GRACE_MS) {
             floatLowSince = 0;
             floatHighSince = 0;
         } else if (fillLevel == FILL_LEVEL_LOW) {
             if (isWaterLow()) {
-                if (floatLowSince == 0) {
-                    floatLowSince = now;
-                    LOGF("[Phao] debounce phao1 gpio17=%d gpio4=%d\n",
-                         digitalRead(FLOAT_LOW_PIN), digitalRead(FLOAT_HIGH_PIN));
-                }
+                if (floatLowSince == 0) floatLowSince = now;
                 if (now - floatLowSince >= FLOAT_DEBOUNCE_TIME) {
                     setInletPump(false);
                     inletAttempt = 0;
@@ -301,11 +278,7 @@ void SamplingManager::handlePump() {
             }
         } else if (fillLevel == FILL_LEVEL_HIGH) {
             if (isWaterHigh()) {
-                if (floatHighSince == 0) {
-                    floatHighSince = now;
-                    LOGF("[Phao] debounce phao2 gpio17=%d gpio4=%d\n",
-                         digitalRead(FLOAT_LOW_PIN), digitalRead(FLOAT_HIGH_PIN));
-                }
+                if (floatHighSince == 0) floatHighSince = now;
                 if (now - floatHighSince >= FLOAT_DEBOUNCE_TIME) {
                     setInletPump(false);
                     inletAttempt = 0;
@@ -332,7 +305,7 @@ void SamplingManager::handlePump() {
                 floatHighSince = 0;
                 emitEvent("manual_pump", "Chưa đủ mực. Thử lại lần " + String((unsigned)inletAttempt) + "/" + String((unsigned)INLET_ATTEMPTS) + ".");
             }
-        }   
+        }
     }
 
     if (isDrainOn()) {
@@ -341,9 +314,9 @@ void SamplingManager::handlePump() {
             drainSince = 0;
             emitEvent("drained", "Đã xả 30s (hết queue). IDLE.");
         }
-        
     }
-    if (commandQueue.empty() && isWaterLow() && !isInletOn() && !isDrainOn()) {
+
+    if (commandQueue.empty() && isWaterLow() && !isInletOn() && !isDrainOn() && !waitingForS3Response) {
         setDrainValve(true);
         drainSince = now;
         emitEvent("draining", "Hết queue. Xả 30 giây.");
@@ -357,22 +330,25 @@ void SamplingManager::finishCommand() {
     inletAttempt = 0;
 }
 
-bool SamplingManager::measureAfterFill(FillLevel level, SensorType type) {
+bool SamplingManager::measureAfterFill(FillLevel level, const String &action) {
+    if (waitingForS3Response) return false;
+
     bool pumping = isInletOn();
     bool full = (level == FILL_LEVEL_LOW) ? isWaterLow() : isWaterHigh();
+
     if (pumping) {
         unsigned long now = millis();
-        if (now - inletSince < PUMP_FLOAT_GRACE_MS) {
-            return false;
-        }
+        if (now - inletSince < PUMP_FLOAT_GRACE_MS) return false;
         unsigned long since = (level == FILL_LEVEL_LOW) ? floatLowSince : floatHighSince;
         full = full && since != 0 && (now - since >= FLOAT_DEBOUNCE_TIME);
     }
+
     if (full) {
-        measureSensor(type);
         setInletPump(false);
-        return true;
+        sendS3Command(action);
+        return false; // Chờ S3 trả dữ liệu trong handleS3Incoming() mới finishCommand
     }
+
     if (!pumping) {
         hanldeInletOn(level);
     }
@@ -380,7 +356,7 @@ bool SamplingManager::measureAfterFill(FillLevel level, SensorType type) {
 }
 
 void SamplingManager::processHead() {
-    if (commandQueue.empty()) return;
+    if (commandQueue.empty() || waitingForS3Response) return;
 
     PendingCommand cmd = commandQueue.front();
     String action = cmd.action;
@@ -396,183 +372,37 @@ void SamplingManager::processHead() {
         return;
     }
     if (action == "ph") {
-        if (measureAfterFill(FILL_LEVEL_LOW, SENSOR_PH)) finishCommand();
+        measureAfterFill(FILL_LEVEL_LOW, "ph");
         return;
     }
     if (action == "temp" || action == "temperature") {
-        measureTemperature();
-        finishCommand();
+        sendS3Command("temp");
         return;
     }
     if (action == "tds") {
-        if (measureAfterFill(FILL_LEVEL_HIGH, SENSOR_TDS)) finishCommand();
+        measureAfterFill(FILL_LEVEL_HIGH, "tds");
         return;
     }
+
     emitEvent("command_error", "action không hỗ trợ: " + action);
     finishCommand();
 }
 
 void SamplingManager::processTestHead() {
-    if (testQueue.empty()) return;
+    if (testQueue.empty() || waitingForS3Response) return;
 
     PendingCommand cmd = testQueue.front();
     testQueue.pop();
     String action = cmd.action;
-    LOGLN("[Test] " + action + " — đo thẳng, không bơm, không phao");
-
-    if (action == "test") {
-        measureSensor(SENSOR_PH);
-        measureTemperature();
-        measureSensor(SENSOR_TDS);
-        emitEvent("test_done", "Đã đo thử pH, nhiệt độ, TDS.");
-        return;
-    }
-    if (action == "test_ph") {
-        measureSensor(SENSOR_PH);
-        return;
-    }
-    if (action == "test_temp" || action == "test_temperature") {
-        measureTemperature();
-        return;
-    }
-    if (action == "test_tds") {
-        measureSensor(SENSOR_TDS);
-        return;
-    }
-    emitEvent("command_error", "test action không hỗ trợ: " + action);
+    LOGLN("[Test] " + action + " — Gửi lệnh đo trực tiếp sang ESP32-S3");
+    sendS3Command(action);
 }
 
 void SamplingManager::handle() {
-    while (!testQueue.empty()) {
+    handleS3Incoming();
+    while (!testQueue.empty() && !waitingForS3Response) {
         processTestHead();
     }
     handlePump();
     processHead();
-}
-
-float SamplingManager::readWaterTempC() {
-    OneWire oneWire(TEMP_DATA_PIN);
-    DallasTemperature probe(&oneWire);
-    probe.begin();
-    if (probe.getDeviceCount() == 0) return NAN;
-    // Không hỏi bit "đã đo xong": lúc vừa cấp nguồn dây vẫn cao, thư viện bỏ qua
-    // 750 ms và trả 85°C — giá trị mặc định trong bộ nhớ DS18B20.
-    probe.setWaitForConversion(false);
-    probe.requestTemperatures();
-    delay(800);
-    float celsius = probe.getTempCByIndex(0);
-    if (celsius == DEVICE_DISCONNECTED_C) return NAN;
-    return celsius;
-}
-
-void SamplingManager::measureTemperature() {
-    measureStartedAt = millis();
-    setSensorPower(SENSOR_TEMP, true);
-    float celsius = readWaterTempC();
-    setSensorPower(SENSOR_TEMP, false);
-    if (isnan(celsius)) {
-        LOGLN("[Temp] Không đọc được DS18B20 (GPIO27)");
-        emitEvent("command_error", "Không đọc được DS18B20");
-        return;
-    }
-    LOGF("[Temp] %.2f C\n", celsius);
-    publishTemperature(celsius);
-}
-
-void SamplingManager::publishTemperature(float celsius) {
-    unsigned long durationMs = millis() - measureStartedAt;
-    String payload = "{";
-    payload += "\"device_id\":\"" + currentConfig.device_id + "\",";
-    payload += "\"timestamp\":" + String(millis() / 1000) + ",";
-    payload += "\"status\":\"success\",";
-    payload += "\"duration_ms\":" + String(durationMs) + ",";
-    payload += "\"sensors_measured\":[\"temperature\"],";
-    payload += "\"data\":{\"temperature\":" + String(celsius, 2) + "}";
-    payload += "}";
-
-    LOGLN("\n[Sampling] >>> GỬI sensor_data <<<");
-    LOGLN(payload);
-    if (mqttHandler.isConnected()) {
-        mqttHandler.publish("sensor_data", payload);
-    }
-    String extra = "\"sensor\":\"temperature\",\"celsius\":" + String(celsius, 2);
-    emitEvent("measuring_sensor", "Đã đo nhiệt độ " + String(celsius, 2) + " C, đã gửi MQTT.", extra);
-}
-
-void SamplingManager::measureSensor(SensorType type) {
-    measureStartedAt = millis();
-    RawReading raw;
-    if (type == SENSOR_PH) {
-        setSensorPower(SENSOR_PH, true);
-        raw = readRawADC(PH_SENSOR_PIN, PH_SAMPLE_COUNT);
-        setSensorPower(SENSOR_PH, false);
-    } else if (type == SENSOR_TDS) {
-        setSensorPower(SENSOR_TDS, true);
-        raw = readRawADC(TDS_SENSOR_PIN, TDS_SAMPLE_COUNT);
-        setSensorPower(SENSOR_TDS, false);
-    } else {
-        return;
-    }
-    publishSensorReading(type, raw);
-}
-
-void SamplingManager::publishSensorReading(SensorType type, const RawReading &raw) {
-    unsigned long durationMs = millis() - measureStartedAt;
-    String name = getSensorName(type);
-    String payload = "{";
-    payload += "\"device_id\":\"" + currentConfig.device_id + "\",";
-    payload += "\"timestamp\":" + String(millis() / 1000) + ",";
-    payload += "\"status\":\"success\",";
-    payload += "\"duration_ms\":" + String(durationMs) + ",";
-    payload += "\"sensors_measured\":[\"" + name + "\"],";
-    payload += "\"raw\":{\"" + name + "\":" + rawReadingJson(raw) + "}";
-    payload += "}";
-
-    LOGLN("\n[Sampling] >>> GỬI sensor_data <<<");
-    LOGLN(payload);
-    if (mqttHandler.isConnected()) {
-        mqttHandler.publish("sensor_data", payload);
-    }
-    String extra = "\"sensor\":\"" + name + "\",\"adc\":" + String(raw.adc) +
-                   ",\"voltage\":" + String(raw.voltage, 3);
-    emitEvent("measuring_sensor", "Đã đo " + name + " raw, đã gửi MQTT.", extra);
-}
-
-int SamplingManager::medianFilter(int *buffer, int count) const {
-    for (int i = 1; i < count; i++) {
-        int key = buffer[i];
-        int j = i - 1;
-        while (j >= 0 && buffer[j] > key) {
-            buffer[j + 1] = buffer[j];
-            j--;
-        }
-        buffer[j + 1] = key;
-    }
-    return buffer[count / 2];
-}
-
-RawReading SamplingManager::readRawADC(uint8_t pin, int sampleCount) {
-    const int maxSamples = 40;
-    if (sampleCount > maxSamples) sampleCount = maxSamples;
-    int samples[maxSamples];
-    for (int i = 0; i < sampleCount; i++) {
-        samples[i] = analogRead(pin);
-        delay(20);
-    }
-    RawReading reading;
-    reading.sampleCount = sampleCount;
-    reading.adc = medianFilter(samples, sampleCount);
-    reading.voltage = (reading.adc * ADC_VREF) / (float)TDS_ADC_MAX;
-    LOGF("[RAW] GPIO%u | ADC=%d | V=%.3fV | samples=%d\n",
-         pin, reading.adc, reading.voltage, sampleCount);
-    return reading;
-}
-
-String SamplingManager::rawReadingJson(const RawReading &reading) const {
-    String json = "{";
-    json += "\"adc\":" + String(reading.adc) + ",";
-    json += "\"voltage\":" + String(reading.voltage, 3) + ",";
-    json += "\"sample_count\":" + String(reading.sampleCount);
-    json += "}";
-    return json;
 }
