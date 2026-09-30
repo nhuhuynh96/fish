@@ -172,25 +172,35 @@ func (s *Scheduler) checkAndTrigger(now time.Time) {
 		}
 
 		var dueSensors []string
-
-		if sched.TempInterval > 0 && now.Sub(sched.lastTempRun) >= sched.TempInterval {
+		stampTemp := sched.TempInterval > 0 && now.Sub(sched.lastTempRun) >= sched.TempInterval
+		stampPh := sched.PhInterval > 0 && now.Sub(sched.lastPhRun) >= sched.PhInterval
+		stampTds := sched.TdsInterval > 0 && now.Sub(sched.lastTdsRun) >= sched.TdsInterval
+		if stampTemp {
 			dueSensors = append(dueSensors, "temp")
+		}
+		if stampPh {
+			dueSensors = append(dueSensors, "ph")
+		}
+		if stampTds {
+			dueSensors = append(dueSensors, "tds")
+		}
+
+		if len(dueSensors) == 0 {
+			continue
+		}
+		log.Printf("[Backend Scheduler] Đến hạn đo [%s]: %v", deviceID, dueSensors)
+		if err := s.svc.TriggerMeasurement(ctx, deviceID, dueSensors); err != nil {
+			log.Printf("[Backend Scheduler] Chưa đo [%s]: %v", deviceID, err)
+			continue
+		}
+		if stampTemp {
 			sched.lastTempRun = now
 		}
-		if sched.PhInterval > 0 && now.Sub(sched.lastPhRun) >= sched.PhInterval {
-			dueSensors = append(dueSensors, "ph")
+		if stampPh {
 			sched.lastPhRun = now
 		}
-		if sched.TdsInterval > 0 && now.Sub(sched.lastTdsRun) >= sched.TdsInterval {
-			dueSensors = append(dueSensors, "tds")
+		if stampTds {
 			sched.lastTdsRun = now
-		}
-
-		if len(dueSensors) > 0 {
-			log.Printf("[Backend Scheduler] >>> Đến hạn đo tự động cho [%s]: %v -> Bắn MQTT Command xuống ESP32 <<<", deviceID, dueSensors)
-			if err := s.svc.TriggerMeasurement(ctx, deviceID, dueSensors); err != nil {
-				log.Printf("[Backend Scheduler] Lỗi khi bắn lệnh đo xuống [%s]: %v", deviceID, err)
-			}
 		}
 	}
 }

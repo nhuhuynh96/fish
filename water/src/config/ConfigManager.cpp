@@ -25,11 +25,8 @@ bool ConfigManager::loadConfig(DeviceConfig &config) {
 
     preferences.end();
 
-    // Tự sinh device_id mặc định nếu chưa có
-    if (config.device_id.isEmpty()) {
-        uint64_t chipid = ESP.getEfuseMac();
-        config.device_id = "esp32_" + String((uint32_t)(chipid >> 32), HEX) + String((uint32_t)chipid, HEX);
-    }
+    // Topic MQTT cố định fish/water/...
+    config.device_id = "water";
 
     Serial.println("[Config] Đọc cấu hình thành công:");
     Serial.printf("  - WiFi SSID: %s\n", config.wifi_ssid.c_str());

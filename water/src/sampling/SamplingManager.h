@@ -36,10 +36,11 @@ private:
     uint8_t inletAttempt = 0;
 
     unsigned long drainSince = 0;
+    unsigned long drainEmptySince = 0;
     unsigned long floatLowSince = 0;
     unsigned long floatHighSince = 0;
 
-    const unsigned long DRAIN_FIXED_TIME = 30000;
+    const unsigned long DRAIN_SAFETY_TIME = 180000;
     const unsigned long INLET_FIXED_TIME = 30000;
     static const uint8_t INLET_ATTEMPTS = 2;
 
@@ -77,6 +78,7 @@ private:
     const char *fillLevelName(FillLevel level) const;
 
     void emitEvent(const String &stage, const String &message, const String &extraJson = "");
+    void emitStage(const String &stage, const String &message, int target);
 };
 
 extern SamplingManager samplingManager;

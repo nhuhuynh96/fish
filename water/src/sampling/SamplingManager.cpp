@@ -34,6 +34,10 @@ const char *SamplingManager::fillLevelName(FillLevel level) const {
     return level == FILL_LEVEL_HIGH ? "phao 2" : "phao 1";
 }
 
+void SamplingManager::emitStage(const String &stage, const String &message, int target) {
+    emitEvent(stage, message, "\"target\":" + String(target));
+}
+
 void SamplingManager::emitEvent(const String &stage, const String &message, const String &extraJson) {
     LOGF("[Sampling Event] [%s] %s\n", stage.c_str(), message.c_str());
     if (!mqttHandler.isConnected()) return;
@@ -138,23 +142,24 @@ void SamplingManager::clearQueue() {
 
 void SamplingManager::hanldeInletOff() {
     if (!isInletOn()) {
-        emitEvent("manual_pump", "Bơm nạp đã tắt. Không tắt nữa.");
+        emitStage("pump_off", "Bơm nạp đã tắt.", currentLevel());
         return;
     }
     setInletPump(false);
     inletAttempt = 0;
     inletSince = 0;
-    emitEvent("manual_pump", "Đã tắt bơm nạp.");
+    emitStage("pump_off", "Đã tắt bơm nạp.", (int)fillLevel);
 }
 
 void SamplingManager::hanldeDrainOff() {
     if (!isDrainOn()) {
-        emitEvent("draining", "Van xả đã tắt. Không tắt nữa.");
+        emitEvent("drain_off", "Van xả đã tắt.");
         return;
     }
     setDrainValve(false);
     drainSince = 0;
-    emitEvent("draining", "Đã tắt van xả.");
+    drainEmptySince = 0;
+    emitEvent("drain_off", "Đã tắt van xả.");
 }
 
 void SamplingManager::clearLocked(bool emit) {
@@ -180,32 +185,37 @@ void SamplingManager::hanldeInletOn(FillLevel level) {
         fillLevel = level;
         floatLowSince = 0;
         floatHighSince = 0;
-        emitEvent("manual_pump", String("Đổi mức dừng: ") + fillLevelName(level));
+        emitStage("filling", String("Đổi mức dừng: ") + fillLevelName(level), (int)level);
         return;
     }
     if (level == FILL_LEVEL_LOW && isWaterLow()) {
-        emitEvent("manual_pump", "Đủ phao 1. Không bơm nữa.");
+        emitStage("already_at_level", "Đủ phao 1. Không bơm.", 1);
         return;
     }
     if (level == FILL_LEVEL_HIGH && float2Active()) {
-        emitEvent("manual_pump", "Đủ phao 2. Không bơm nữa.");
+        emitStage("already_at_level", "Đủ phao 2. Không bơm.", 2);
         return;
     }
     setInletPump(true);
     inletSince = millis();
     fillLevel = level;
     inletAttempt = 0;
-    emitEvent("manual_pump", String("Bơm nạp: BẬT (") + fillLevelName(fillLevel) + ")");
+    emitStage("filling", String("Bơm nạp: BẬT (") + fillLevelName(fillLevel) + ")", (int)level);
 }
 
 void SamplingManager::hanldeDrainOn() {
+    if (currentLevel() == 0) {
+        emitStage("drained", "Đã ở mực 0. Không xả.", 0);
+        return;
+    }
     if (isDrainOn()) {
-        emitEvent("draining", "Van xả đã bật. Không xả nữa.");
+        emitEvent("draining", "Van xả đang mở.");
         return;
     }
     setDrainValve(true);
     drainSince = millis();
-    emitEvent("draining", "Van xả: BẬT");
+    drainEmptySince = 0;
+    emitStage("draining", "Van xả: BẬT, xả đến khi cả hai phao tắt.", 0);
 }
 
 void SamplingManager::handlePump() {
@@ -224,7 +234,7 @@ void SamplingManager::handlePump() {
                     setInletPump(false);
                     inletAttempt = 0;
                     inletSince = 0;
-                    emitEvent("manual_pump", "Đủ phao 1. Tắt bơm.");
+                    emitStage("filled", "Đủ phao 1. Tắt bơm.", 1);
                 }
             } else {
                 floatLowSince = 0;
@@ -236,7 +246,7 @@ void SamplingManager::handlePump() {
                     setInletPump(false);
                     inletAttempt = 0;
                     inletSince = 0;
-                    emitEvent("manual_pump", "Đủ phao 2. Tắt bơm.");
+                    emitStage("filled", "Đủ phao 2. Tắt bơm.", 2);
                 }
             } else {
                 floatHighSince = 0;
@@ -248,21 +258,35 @@ void SamplingManager::handlePump() {
                 setInletPump(false);
                 inletAttempt = 0;
                 inletSince = 0;
-                emitEvent("manual_pump_timeout", "Bơm 3 lần 30s chưa tới mực. Đã ngưng.");
+                emitStage("fill_timeout", "Bơm 3 lần 30s chưa tới mực. Đã ngưng.", (int)fillLevel);
                 return;
             }
             inletAttempt++;
             inletSince = now;
             floatLowSince = 0;
             floatHighSince = 0;
-            emitEvent("manual_pump", "Chưa đủ mực. Thử lại lần " + String((unsigned)inletAttempt) + "/" + String((unsigned)INLET_ATTEMPTS) + ".");
+            emitStage("filling", "Chưa đủ mực. Thử lại lần " + String((unsigned)inletAttempt) + "/" + String((unsigned)INLET_ATTEMPTS) + ".", (int)fillLevel);
         }
     }
 
-    if (isDrainOn() && now - drainSince >= DRAIN_FIXED_TIME) {
-        setDrainValve(false);
-        drainSince = 0;
-        emitEvent("drained", "Đã xả 30 giây. Tắt van.");
+    if (isDrainOn()) {
+        if (currentLevel() == 0) {
+            if (drainEmptySince == 0) drainEmptySince = now;
+            if (now - drainEmptySince >= FLOAT_DEBOUNCE_TIME) {
+                setDrainValve(false);
+                drainSince = 0;
+                drainEmptySince = 0;
+                emitStage("drained", "Cả hai phao đã tắt. Tắt van.", 0);
+            }
+        } else {
+            drainEmptySince = 0;
+        }
+        if (isDrainOn() && now - drainSince >= DRAIN_SAFETY_TIME) {
+            setDrainValve(false);
+            drainSince = 0;
+            drainEmptySince = 0;
+            emitStage("drain_timeout", "Xả quá lâu mà chưa về mực 0. Tắt van.", 0);
+        }
     }
 }
 

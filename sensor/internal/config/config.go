@@ -21,6 +21,6 @@ func DefaultConfig() DeviceConfig {
 		MqttPort: 1883,
 		MqttUser: "",
 		MqttPass: "",
-		DeviceID: "hoca1",
+		DeviceID: "sensor",
 	}
 }

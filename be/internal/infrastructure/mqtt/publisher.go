@@ -37,6 +37,11 @@ func (p *CommandPublisher) publishCommand(deviceID, action string, level int) er
 	return p.client.Publish(topic, payload)
 }
 
+func (p *CommandPublisher) PublishLevel(ctx context.Context, deviceID string) error {
+	_ = ctx
+	return p.publishCommand(deviceID, "level", 0)
+}
+
 func (p *CommandPublisher) PublishMeasure(ctx context.Context, deviceID string, sensors []string) error {
 	_ = ctx
 	actions := expandMeasureActions(sensors)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,16 +20,21 @@ type ScheduleRegistrar interface {
 }
 
 type Service struct {
-	repo      fish.MeasurementRepository
-	eventRepo fish.EventRepository
-	devRepo   fish.DeviceRepository
-	calRepo   fish.CalibrationRepository
-	pub       fish.CommandPublisher
-	hub       fish.EventHub
-	sched     ScheduleRegistrar
-	narrator  advice.Narrator
-	pondRepo  fish.PondConfigRepository
-	kitRepo   fish.KitReadingRepository
+	repo       fish.MeasurementRepository
+	eventRepo  fish.EventRepository
+	devRepo    fish.DeviceRepository
+	calRepo    fish.CalibrationRepository
+	pub        fish.CommandPublisher
+	hub        fish.EventHub
+	sched      ScheduleRegistrar
+	narrator   advice.Narrator
+	pondRepo   fish.PondConfigRepository
+	kitRepo    fish.KitReadingRepository
+	jobMu      sync.Mutex
+	jobRunning bool
+	jobPond    string
+	waterWait  chan waterSig
+	sensorWait chan sensorSig
 }
 
 func NewService(
@@ -68,13 +74,22 @@ func (s *Service) SetNarrator(n advice.Narrator) {
 	s.narrator = n
 }
 
-// 1. Gửi từng action đo (ph / temp / tds). pH và TDS tự bơm tới phao; nhiệt độ đo thẳng.
+// 1. Bắt đầu một việc đo cho hồ. Backend tự hỏi mực nước, bơm hoặc xả, rồi mới gọi sensor.
 func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, sensors []string) error {
 	if len(sensors) == 0 {
 		sensors = []string{"all"}
 	}
-	log.Printf("[Usecase] Gửi lệnh đo tới device [%s] với cảm biến: %v", deviceID, sensors)
-	return s.pub.PublishMeasure(ctx, deviceID, sensors)
+	s.jobMu.Lock()
+	if s.jobRunning {
+		s.jobMu.Unlock()
+		return fmt.Errorf("đang đo, chưa nhận thêm việc")
+	}
+	s.jobRunning = true
+	s.jobPond = deviceID
+	s.jobMu.Unlock()
+	log.Printf("[Usecase] Bắt đầu việc đo hồ [%s]: %v", deviceID, sensors)
+	go s.runMeasure(deviceID, sensors)
+	return nil
 }
 
 // 2. Điều khiển bơm nạp / xả thủ công
@@ -142,6 +157,10 @@ func (s *Service) HandleSensorData(ctx context.Context, deviceID string, payload
 
 	if body.DeviceID == "" {
 		body.DeviceID = deviceID
+	}
+	s.noteSensor(deviceID, body.DeviceID, body.Sensors, false, "")
+	if pond := s.jobPondID(); pond != "" && (deviceID == sensorDeviceID || body.DeviceID == sensorDeviceID) {
+		body.DeviceID = pond
 	}
 
 	m := &fish.Measurement{
@@ -247,6 +266,7 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 		Stage      string `json:"stage"`
 		State      string `json:"state"`
 		Message    string `json:"message"`
+		Level      int    `json:"level"`
 		InletOn    *bool  `json:"inlet_on"`
 		DrainOn    *bool  `json:"drain_on"`
 		FloatFull  *bool  `json:"float_full"`
@@ -285,6 +305,7 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 	if s.hub != nil {
 		s.hub.Broadcast("sampling_event", e)
 	}
+	s.noteWater(deviceID, body.DeviceID, body.Stage, body.Level, body.Message)
 
 	return nil
 }
