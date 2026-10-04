@@ -111,7 +111,7 @@ bool SensorManager::readTemperature(float &celsius) {
     return true;
 }
 
-bool SensorManager::readAnalog(uint8_t adcPin, uint8_t powerPin, int samples, int &adc, float &voltage) {
+bool SensorManager::readAnalog(const char *name, uint8_t adcPin, uint8_t powerPin, int samples, int &adc, float &voltage) {
     digitalWrite(powerPin, HIGH);
     waitMs(ANALOG_SETTLE_MS);
 
@@ -119,6 +119,7 @@ bool SensorManager::readAnalog(uint8_t adcPin, uint8_t powerPin, int samples, in
     if (samples > 40) samples = 40;
     for (int i = 0; i < samples; i++) {
         buf[i] = analogRead(adcPin);
+        LOGF("[Sensor] %s mẫu %d/%d ADC=%d\n", name, i + 1, samples, buf[i]);
         waitMs(SAMPLE_INTERVAL_MS);
     }
     digitalWrite(powerPin, LOW);
@@ -176,7 +177,7 @@ void SensorManager::run(const String &action) {
     if (wantPh) {
         int adc = 0;
         float voltage = 0;
-        if (readAnalog(PH_ADC_PIN, PH_POWER_PIN, PH_SAMPLES, adc, voltage)) {
+        if (readAnalog("pH", PH_ADC_PIN, PH_POWER_PIN, PH_SAMPLES, adc, voltage)) {
             addAnalog(doc, "ph", adc, voltage, PH_SAMPLES);
             any = true;
             LOGF("[Sensor] pH ADC=%d V=%.3f\n", adc, voltage);
@@ -187,7 +188,7 @@ void SensorManager::run(const String &action) {
     if (wantTds) {
         int adc = 0;
         float voltage = 0;
-        if (readAnalog(TDS_ADC_PIN, TDS_POWER_PIN, TDS_SAMPLES, adc, voltage)) {
+        if (readAnalog("TDS", TDS_ADC_PIN, TDS_POWER_PIN, TDS_SAMPLES, adc, voltage)) {
             addAnalog(doc, "tds", adc, voltage, TDS_SAMPLES);
             any = true;
             LOGF("[Sensor] TDS ADC=%d V=%.3f\n", adc, voltage);

@@ -364,13 +364,18 @@ func (s *Service) HandleTelemetry(ctx context.Context, deviceID string, payload 
 
 	d, _ := s.devRepo.GetDevice(ctx, deviceID)
 	if d == nil {
-		d = &fish.Device{ID: deviceID, Online: true}
+		d = &fish.Device{ID: deviceID}
 	}
+	wasOffline := !d.Online
+	d.Online = true
 	d.LastSeen = time.Now()
 	d.RSSI = body.RSSI
 	d.Uptime = body.Uptime
 	if body.State != "" {
 		d.State = body.State
+	}
+	if wasOffline {
+		log.Printf("[Usecase] Device [%s] status: online=true (telemetry)", deviceID)
 	}
 
 	if err := s.devRepo.UpsertDevice(ctx, d); err != nil {

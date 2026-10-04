@@ -10,6 +10,7 @@
 // Chân nút nhấn BOOT trên ESP32 để kích hoạt lại chế độ cấu hình
 const int BUTTON_PIN = 0; // GPIO 0 (Nút BOOT có sẵn trên board ESP32)
 const unsigned long BUTTON_HOLD_TIME = 3000; // Giữ 3 giây để vào chế độ cấu hình
+const unsigned long LINK_CHECK_MS = 5UL * 60UL * 1000UL;
 
 unsigned long buttonPressStartTime = 0;
 bool buttonIsPressed = false;
@@ -125,6 +126,8 @@ void setup() {
     // Tiến hành kết nối WiFi đã cấu hình
     LOGF("[Main] Đang kết nối WiFi: %s\n", currentConfig.wifi_ssid.c_str());
     WiFi.mode(WIFI_STA);
+    WiFi.persistent(false);
+    WiFi.setAutoReconnect(true);
     WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
 
     unsigned long startAttempt = millis();
@@ -136,24 +139,20 @@ void setup() {
     }
     Serial.println();
 
+    mqttHandler.begin(currentConfig);
+    mqttHandler.setCallback([](char* topic, byte* payload, unsigned int length) {
+        String msg;
+        for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+        LOGF("[App] Lệnh nhận từ MQTT: %s\n", msg.c_str());
+        handleMqttCommand(msg);
+    });
+
     if (WiFi.status() == WL_CONNECTED) {
         LOGLN("[Main] WiFi đã kết nối thành công!");
         LOGF("[Main] IP Address: %s\n", WiFi.localIP().toString().c_str());
-
-        // Khởi động MQTT Handler
-        mqttHandler.begin(currentConfig);
-        mqttHandler.setCallback([](char* topic, byte* payload, unsigned int length) {
-            String msg;
-            for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-            LOGF("[App] Lệnh nhận từ MQTT: %s\n", msg.c_str());
-
-            // Chuyển cho bộ điều phối lệnh
-            handleMqttCommand(msg);
-        });
+        mqttHandler.reconnect();
     } else {
-        LOGLN("[Main] Kết nối WiFi thất bại (Sai pass hoặc mất sóng)!");
-        LOGLN("[Main] Tự động chuyển sang chế độ AP cấu hình...");
-        webPortal.startPortal();
+        LOGLN("[Main] WiFi chưa lên. Giữ STA, thử lại mỗi 5 phút.");
     }
 }
 
@@ -181,6 +180,26 @@ void checkButtonHold() {
     }
 }
 
+static unsigned long lastLinkCheck = 0;
+
+static void checkLinks() {
+    unsigned long now = millis();
+    if (now - lastLinkCheck < LINK_CHECK_MS) return;
+    lastLinkCheck = now;
+
+    if (WiFi.status() != WL_CONNECTED) {
+        LOGLN("[WiFi] Mất kết nối. Đang nối lại...");
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
+        return;
+    }
+
+    LOGF("[WiFi] Còn kết nối. IP: %s\n", WiFi.localIP().toString().c_str());
+    if (!mqttHandler.isConnected()) {
+        mqttHandler.reconnect();
+    }
+}
+
 void loop() {
     // Nếu đang ở chế độ AP Portal cấu hình
     if (webPortal.isRunning()) {
@@ -190,8 +209,9 @@ void loop() {
 
     // Kiểm tra nút bấm để vào lại chế độ AP nếu cần
     checkButtonHold();
+    checkLinks();
 
-    // Xử lý kết nối và nhận lệnh MQTT
+    // Giữ phiên MQTT đang sống. Nối lại nằm trong checkLinks, mỗi 5 phút.
     mqttHandler.handle();
 
     // Đẩy Serial log đã xếp hàng lên MQTT topic fish/<id>/log

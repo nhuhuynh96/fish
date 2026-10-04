@@ -10,6 +10,7 @@
 
 const int BUTTON_PIN = 0;
 const unsigned long BUTTON_HOLD_TIME = 3000;
+const unsigned long LINK_CHECK_MS = 5UL * 60UL * 1000UL;
 
 unsigned long buttonPressStartTime = 0;
 bool buttonIsPressed = false;
@@ -46,6 +47,7 @@ void handleMqttCommand(const String &msg) {
 
 void setup() {
     Serial.begin(115200);
+    neopixelWrite(RGB_BUILTIN, 0, 0, 0);
     delay(1000);
 
     LOGLN("\n==========================================");
@@ -68,6 +70,8 @@ void setup() {
 
     LOGF("[Main] Đang kết nối WiFi: %s\n", currentConfig.wifi_ssid.c_str());
     WiFi.mode(WIFI_STA);
+    WiFi.persistent(false);
+    WiFi.setAutoReconnect(true);
     WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
 
     unsigned long startAttempt = millis();
@@ -77,19 +81,20 @@ void setup() {
     }
     Serial.println();
 
+    mqttHandler.begin(currentConfig);
+    mqttHandler.setCallback([](char *topic, byte *payload, unsigned int length) {
+        (void)topic;
+        String msg;
+        for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+        handleMqttCommand(msg);
+    });
+
     if (WiFi.status() == WL_CONNECTED) {
         LOGLN("[Main] WiFi đã kết nối.");
         LOGF("[Main] IP: %s\n", WiFi.localIP().toString().c_str());
-        mqttHandler.begin(currentConfig);
-        mqttHandler.setCallback([](char *topic, byte *payload, unsigned int length) {
-            (void)topic;
-            String msg;
-            for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-            handleMqttCommand(msg);
-        });
+        mqttHandler.reconnect();
     } else {
-        LOGLN("[Main] WiFi thất bại. Chuyển sang AP cấu hình...");
-        webPortal.startPortal();
+        LOGLN("[Main] WiFi chưa lên. Giữ STA, thử lại mỗi 5 phút.");
     }
 }
 
@@ -108,6 +113,26 @@ void checkButtonHold() {
     }
 }
 
+static unsigned long lastLinkCheck = 0;
+
+static void checkLinks() {
+    unsigned long now = millis();
+    if (now - lastLinkCheck < LINK_CHECK_MS) return;
+    lastLinkCheck = now;
+
+    if (WiFi.status() != WL_CONNECTED) {
+        LOGLN("[WiFi] Mất kết nối. Đang nối lại...");
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
+        return;
+    }
+
+    LOGF("[WiFi] Còn kết nối. IP: %s\n", WiFi.localIP().toString().c_str());
+    if (!mqttHandler.isConnected()) {
+        mqttHandler.reconnect();
+    }
+}
+
 void loop() {
     if (webPortal.isRunning()) {
         webPortal.handlePortal();
@@ -115,6 +140,7 @@ void loop() {
     }
 
     checkButtonHold();
+    checkLinks();
     mqttHandler.handle();
     remoteLog.handle();
     sensorManager.handle();

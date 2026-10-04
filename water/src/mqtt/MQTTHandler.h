@@ -13,6 +13,7 @@ public:
     MQTTHandler();
     void begin(const DeviceConfig &config);
     void handle();
+    bool reconnect();
     bool isConnected();
     bool publish(const String &subTopic, const String &payload, bool retained = false);
     bool publishStatus(const String &statusMessage = "online");
@@ -22,10 +23,8 @@ private:
     WiFiClient espClient;
     PubSubClient mqttClient;
     DeviceConfig currentConfig;
-    unsigned long lastReconnectAttempt = 0;
     MessageCallback userCallback = nullptr;
 
-    bool reconnect();
     void onMessageReceived(char* topic, byte* payload, unsigned int length);
 };
 

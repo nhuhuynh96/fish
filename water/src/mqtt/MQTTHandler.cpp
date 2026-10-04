@@ -65,19 +65,7 @@ bool MQTTHandler::reconnect() {
 }
 
 void MQTTHandler::handle() {
-    if (currentConfig.mqtt_host.isEmpty() || WiFi.status() != WL_CONNECTED) {
-        return;
-    }
-
-    if (!mqttClient.connected()) {
-        unsigned long now = millis();
-        if (now - lastReconnectAttempt > 5000) { // Thử kết nối lại mỗi 5 giây
-            lastReconnectAttempt = now;
-            if (reconnect()) {
-                lastReconnectAttempt = 0;
-            }
-        }
-    } else {
+    if (mqttClient.connected()) {
         mqttClient.loop();
     }
 }
