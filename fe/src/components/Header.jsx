@@ -1,14 +1,22 @@
 import React from 'react';
 
+function BoardStatus({ label, online, measuring }) {
+  return (
+    <div className="device-status-badge">
+      <div className={`status-dot ${measuring ? 'measuring' : online ? 'online' : 'offline'}`} />
+      <span style={{ fontWeight: 600 }}>
+        {label}: {measuring ? 'Đang đo' : online ? 'Online' : 'Offline'}
+      </span>
+    </div>
+  );
+}
+
 export default function Header({
-  devices,
-  selectedDevice,
-  setSelectedDevice,
+  sensorOnline,
+  waterOnline,
   wsConnected,
-  deviceStatus,
   currentState,
 }) {
-  const isOnline = deviceStatus?.online ?? false;
   const isMeasuring = currentState && currentState !== 'IDLE' && currentState !== 'UNKNOWN';
 
   return (
@@ -26,47 +34,8 @@ export default function Header({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-        {/* Device Selector */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Thiết bị:</label>
-          <select
-            value={selectedDevice}
-            onChange={(e) => setSelectedDevice(e.target.value)}
-            style={{
-              background: 'rgba(15, 23, 42, 0.8)',
-              border: '1px solid var(--card-border)',
-              borderRadius: '10px',
-              padding: '6px 12px',
-              color: '#fff',
-              fontSize: '13px',
-              fontFamily: 'var(--font-mono)',
-              outline: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            {devices.length > 0 ? (
-              devices.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.id} {d.online ? '🟢' : '⚪'}
-                </option>
-              ))
-            ) : (
-              <option value={selectedDevice}>{selectedDevice} (Default)</option>
-            )}
-          </select>
-        </div>
-
-        {/* ESP32 Status Badge */}
-        <div className="device-status-badge">
-          <div
-            className={`status-dot ${
-              isMeasuring ? 'measuring' : isOnline ? 'online' : 'offline'
-            }`}
-          />
-          <span style={{ fontWeight: 600 }}>
-            {isMeasuring ? `Đang đo: ${currentState}` : isOnline ? 'ESP32 Online' : 'ESP32 Sẵn sàng'}
-          </span>
-        </div>
+        <BoardStatus label="Sensor" online={sensorOnline} measuring={isMeasuring} />
+        <BoardStatus label="Water" online={waterOnline} />
 
         {/* WS Connection Indicator */}
         <div

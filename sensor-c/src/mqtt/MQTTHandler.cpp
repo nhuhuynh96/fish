@@ -13,6 +13,8 @@ void MQTTHandler::begin(const DeviceConfig &config) {
     }
 
     mqttClient.setBufferSize(1024); // Tăng kích thước bộ đệm MQTT để gửi payload JSON lớn
+    // Nối lại chạy trong loop(); chờ lâu sẽ chặn xử lý lệnh đo.
+    mqttClient.setSocketTimeout(3);
     mqttClient.setServer(currentConfig.mqtt_host.c_str(), currentConfig.mqtt_port);
     mqttClient.setCallback([this](char* topic, byte* payload, unsigned int length) {
         this->onMessageReceived(topic, payload, length);

@@ -9,8 +9,21 @@ export default function ControlPanel({
   drainOn = false,
 }) {
   const [selectedSensors, setSelectedSensors] = useState(['temp', 'ph']);
-  const [inletLevel, setInletLevel] = useState(2);
+  const [pumpLevel, setPumpLevel] = useState(0);
+  const [duration, setDuration] = useState(60);
   const [loading, setLoading] = useState(false);
+
+  const levelOptions = [
+    { id: 0, label: 'Không level' },
+    { id: 1, label: 'Phao 1' },
+    { id: 2, label: 'Phao 2' },
+  ];
+
+  const clampDuration = (value) => {
+    const n = Math.round(Number(value));
+    if (!Number.isFinite(n)) return 60;
+    return Math.min(300, Math.max(1, n));
+  };
 
   const availableSensors = [
     { id: 'temp', label: '🌡️ Nhiệt độ' },
@@ -42,11 +55,13 @@ export default function ControlPanel({
   };
 
   const toggleInlet = async () => {
-    await onPump('inlet', !inletOn, inletLevel);
+    if (inletOn) await onPump('inlet', false);
+    else await onPump('inlet', true, pumpLevel, clampDuration(duration));
   };
 
   const toggleDrain = async () => {
-    await onPump('drain', !drainOn);
+    if (drainOn) await onPump('drain', false);
+    else await onPump('drain', true, pumpLevel, clampDuration(duration));
   };
 
   const handleClearQueue = async () => {
@@ -131,7 +146,7 @@ export default function ControlPanel({
           marginBottom: '20px',
         }}
       >
-        💡 MQTT <code>{'{"action":"inlet_on"|"inlet_off"|"drain_on"|"drain_off","level":1|2}'}</code>. Bơm nạp chọn phao 1 hoặc 2. Đo: ph/temp/tds. Đo thử nhiệt: <code>{'{"action":"test_temp"}'}</code>.
+        Nút đo gửi lệnh thẳng tới sensor, không bơm hay xả. Nút bơm và xóa hàng đợi gửi một lệnh tới mạch water.
       </div>
 
       {/* Action 3: Manual Pump Controls */}
@@ -139,21 +154,42 @@ export default function ControlPanel({
         <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px' }}>
           Điều khiển bơm / xả (MQTT queue):
         </div>
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-          <button
-            type="button"
-            className={`toggle-pill ${inletLevel === 1 ? 'selected' : ''}`}
-            onClick={() => setInletLevel(1)}
-          >
-            Phao 1
-          </button>
-          <button
-            type="button"
-            className={`toggle-pill ${inletLevel === 2 ? 'selected' : ''}`}
-            onClick={() => setInletLevel(2)}
-          >
-            Phao 2
-          </button>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+          {levelOptions.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              className={`toggle-pill ${pumpLevel === opt.id ? 'selected' : ''}`}
+              onClick={() => setPumpLevel(opt.id)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '12px',
+            color: 'var(--text-muted)',
+            marginBottom: '8px',
+          }}
+        >
+          Thời gian tối đa (giây, 1–300):
+          <input
+            type="number"
+            min={1}
+            max={300}
+            value={duration}
+            onChange={(e) => setDuration(e.target.value)}
+            onBlur={() => setDuration(clampDuration(duration))}
+            className="form-input"
+            style={{ width: '90px' }}
+          />
+        </label>
+        <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px' }}>
+          Không level: chạy đủ thời gian. Bơm nạp có level: dừng khi phao đó đóng. Bơm xả có level: dừng khi phao đó tắt. Cái nào tới trước thì dừng.
         </div>
         <div className="btn-group" style={{ margin: 0 }}>
           <button

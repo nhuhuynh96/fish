@@ -87,40 +87,65 @@ func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, senso
 	s.jobRunning = true
 	s.jobPond = deviceID
 	s.jobMu.Unlock()
-	log.Printf("[Usecase] Bắt đầu việc đo hồ [%s]: %v", deviceID, sensors)
+	log.Printf("[Usecase] Bắt đầu đo tự động [%s]: chỉnh mực từng sensor, đo, rồi xả 60s: %v", deviceID, sensors)
 	go s.runMeasure(deviceID, sensors)
 	return nil
 }
 
-// 2. Điều khiển bơm nạp / xả thủ công
-func (s *Service) SetPump(ctx context.Context, deviceID string, target string, state bool, level int) error {
+// 1b. Đo ngay từ dashboard: gửi thẳng lệnh tới sensor, không bơm hay xả.
+func (s *Service) MeasureNow(ctx context.Context, sensors []string) error {
+	if len(sensors) == 0 {
+		sensors = []string{"all"}
+	}
+	s.jobMu.Lock()
+	running := s.jobRunning
+	s.jobMu.Unlock()
+	if running {
+		return fmt.Errorf("đang chạy lịch đo tự động")
+	}
+	log.Printf("[Usecase] Đo ngay, gửi sensor: %v", sensors)
+	return s.pub.PublishMeasure(ctx, sensorDeviceID, sensors)
+}
+
+// 2. Điều khiển bơm nạp / xả thủ công. level 0 = chạy theo thời gian, duration 0 = mặc định của firmware.
+func (s *Service) SetPump(ctx context.Context, deviceID string, target string, state bool, level, duration int) error {
+	_ = deviceID
 	t := strings.ToLower(strings.TrimSpace(target))
 	if t != "inlet" && t != "drain" {
 		return fmt.Errorf("pump target must be \"inlet\" or \"drain\", got %q", target)
 	}
-	if t == "inlet" && state && level != 1 {
-		level = 2
+	if level < 0 || level > 2 {
+		level = 0
 	}
-	log.Printf("[Usecase] Điều khiển bơm [%s] trên device [%s]: state=%v level=%d", t, deviceID, state, level)
-	return s.pub.PublishPump(ctx, deviceID, t, state, level)
+	if duration < 0 {
+		duration = 0
+	}
+	if duration > 300 {
+		duration = 300
+	}
+	log.Printf("[Usecase] Điều khiển bơm [%s] gửi water: state=%v level=%d duration=%ds", t, state, level, duration)
+	return s.pub.PublishPump(ctx, waterDeviceID, t, state, level, duration)
 }
 
 func (s *Service) ClearQueue(ctx context.Context, deviceID string) error {
-	log.Printf("[Usecase] Xóa hàng đợi trên device [%s]", deviceID)
-	return s.pub.PublishClearQueue(ctx, deviceID)
+	_ = deviceID
+	log.Printf("[Usecase] Xóa hàng đợi trên water")
+	return s.pub.PublishClearQueue(ctx, waterDeviceID)
 }
 
-// 2b. Cấu hình lịch đo tự động
+// 2b. Lịch đo nằm ở backend scheduler. Firmware sensor không nhận action schedule.
 func (s *Service) SetSchedule(ctx context.Context, deviceID string, enabled bool, temp, ph, turb, tds int) error {
-	log.Printf("[Usecase] Cấu hình lịch đo trên device [%s]: auto=%v, temp=%ds, ph=%ds, turb=%ds, tds=%ds",
+	_ = ctx
+	log.Printf("[Usecase] Lịch đo [%s] do backend giữ, lệnh đo sẽ gửi sensor: auto=%v, temp=%ds, ph=%ds, turb=%ds, tds=%ds",
 		deviceID, enabled, temp, ph, turb, tds)
-	return s.pub.PublishSchedule(ctx, deviceID, enabled, temp, ph, turb, tds)
+	return nil
 }
 
-// 2c. Bật/tắt chế độ tự động đo
+// 2c. Bật/tắt chế độ tự động đo trên backend scheduler.
 func (s *Service) ToggleAuto(ctx context.Context, deviceID string, enabled bool) error {
-	log.Printf("[Usecase] Bật/tắt tự động đo trên device [%s]: enabled=%v", deviceID, enabled)
-	return s.pub.PublishAutoToggle(ctx, deviceID, enabled)
+	_ = ctx
+	log.Printf("[Usecase] Auto [%s] -> %v, lệnh đo gửi sensor", deviceID, enabled)
+	return nil
 }
 
 type rawReading struct {
@@ -159,9 +184,6 @@ func (s *Service) HandleSensorData(ctx context.Context, deviceID string, payload
 		body.DeviceID = deviceID
 	}
 	s.noteSensor(deviceID, body.DeviceID, body.Sensors, false, "")
-	if pond := s.jobPondID(); pond != "" && (deviceID == sensorDeviceID || body.DeviceID == sensorDeviceID) {
-		body.DeviceID = pond
-	}
 
 	m := &fish.Measurement{
 		ID:         uuid.New().String(),

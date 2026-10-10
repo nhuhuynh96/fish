@@ -10,7 +10,9 @@
 // Chân nút nhấn BOOT trên ESP32 để kích hoạt lại chế độ cấu hình
 const int BUTTON_PIN = 0; // GPIO 0 (Nút BOOT có sẵn trên board ESP32)
 const unsigned long BUTTON_HOLD_TIME = 3000; // Giữ 3 giây để vào chế độ cấu hình
-const unsigned long LINK_CHECK_MS = 5UL * 60UL * 1000UL;
+const unsigned long WIFI_RETRY_MS = 30000;
+const unsigned long MQTT_RETRY_MIN_MS = 5000;
+const unsigned long MQTT_RETRY_MAX_MS = 60000;
 
 unsigned long buttonPressStartTime = 0;
 bool buttonIsPressed = false;
@@ -27,30 +29,48 @@ static void publishCommandError(const String &message) {
     }
 }
 
-static FillLevel parseCommandLevel(JsonDocument &doc) {
+const uint32_t DEFAULT_DURATION_S = 60;
+const uint32_t MIN_DURATION_S = 1;
+const uint32_t MAX_DURATION_S = 300;
+
+// 0 = không có level (chạy theo thời gian), 1 = phao 1, 2 = phao 2.
+// fillLevel / FillLevel là kiểu cũ đánh số từ 0.
+static uint8_t parseTarget(JsonDocument &doc) {
     if (!doc["level"].isNull()) {
         if (doc["level"].is<const char *>()) {
             String s = doc["level"].as<const char *>();
             s.toLowerCase();
             s.trim();
-            if (s == "high" || s == "hight" || s == "cao" || s == "2") {
-                return FILL_LEVEL_HIGH;
-            }
-            return FILL_LEVEL_LOW;
+            if (s == "high" || s == "hight" || s == "cao" || s == "2") return 2;
+            if (s == "low" || s == "thap" || s == "1") return 1;
+            return 0;
         }
         int n = doc["level"].as<int>();
-        return n >= 2 ? FILL_LEVEL_HIGH : FILL_LEVEL_LOW;
+        if (n >= 2) return 2;
+        if (n == 1) return 1;
+        return 0;
     }
     if (!doc["fillLevel"].isNull()) {
-        return doc["fillLevel"].as<int>() >= 1 ? FILL_LEVEL_HIGH : FILL_LEVEL_LOW;
+        return doc["fillLevel"].as<int>() >= 1 ? 2 : 1;
     }
     if (!doc["FillLevel"].isNull()) {
-        return doc["FillLevel"].as<int>() >= 1 ? FILL_LEVEL_HIGH : FILL_LEVEL_LOW;
+        return doc["FillLevel"].as<int>() >= 1 ? 2 : 1;
     }
-    return FILL_LEVEL_LOW;
+    return 0;
 }
 
-// {"action":"inlet_on"|"inlet_off"|"drain_on"|"drain_off"|"level"|"clear_queue","level":1|2}
+static uint32_t parseDurationMs(JsonDocument &doc) {
+    long seconds = DEFAULT_DURATION_S;
+    if (!doc["duration"].isNull()) {
+        seconds = doc["duration"].as<long>();
+    }
+    if (seconds < (long)MIN_DURATION_S) seconds = MIN_DURATION_S;
+    if (seconds > (long)MAX_DURATION_S) seconds = MAX_DURATION_S;
+    return (uint32_t)seconds * 1000UL;
+}
+
+// {"action":"inlet_on"|"drain_on","level":1|2,"duration":60}
+// {"action":"inlet_off"|"drain_off"|"level"|"clear_queue"}
 void handleMqttCommand(const String &msg) {
     String payload = msg;
     payload.trim();
@@ -58,7 +78,7 @@ void handleMqttCommand(const String &msg) {
 
     JsonDocument doc;
     if (deserializeJson(doc, payload)) {
-        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"inlet_on\",\"level\":1}");
+        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"inlet_on\",\"level\":1,\"duration\":60}");
         return;
     }
 
@@ -92,7 +112,8 @@ void handleMqttCommand(const String &msg) {
 
     PendingCommand cmd;
     cmd.action = action;
-    cmd.fillLevel = parseCommandLevel(doc);
+    cmd.target = parseTarget(doc);
+    cmd.durationMs = parseDurationMs(doc);
     samplingManager.enqueue(cmd);
 }
 
@@ -152,7 +173,7 @@ void setup() {
         LOGF("[Main] IP Address: %s\n", WiFi.localIP().toString().c_str());
         mqttHandler.reconnect();
     } else {
-        LOGLN("[Main] WiFi chưa lên. Giữ STA, thử lại mỗi 5 phút.");
+        LOGLN("[Main] WiFi chưa lên. Giữ STA, thử lại mỗi 30 giây.");
     }
 }
 
@@ -180,23 +201,35 @@ void checkButtonHold() {
     }
 }
 
-static unsigned long lastLinkCheck = 0;
+static unsigned long lastWifiTry = 0;
+static unsigned long lastMqttTry = 0;
+static unsigned long mqttRetryMs = MQTT_RETRY_MIN_MS;
 
 static void checkLinks() {
     unsigned long now = millis();
-    if (now - lastLinkCheck < LINK_CHECK_MS) return;
-    lastLinkCheck = now;
 
     if (WiFi.status() != WL_CONNECTED) {
-        LOGLN("[WiFi] Mất kết nối. Đang nối lại...");
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
+        if (now - lastWifiTry >= WIFI_RETRY_MS) {
+            lastWifiTry = now;
+            LOGLN("[WiFi] Mất kết nối. Đang nối lại...");
+            WiFi.mode(WIFI_STA);
+            WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
+        }
         return;
     }
 
-    LOGF("[WiFi] Còn kết nối. IP: %s\n", WiFi.localIP().toString().c_str());
-    if (!mqttHandler.isConnected()) {
-        mqttHandler.reconnect();
+    if (mqttHandler.isConnected()) {
+        mqttRetryMs = MQTT_RETRY_MIN_MS;
+        return;
+    }
+
+    if (now - lastMqttTry < mqttRetryMs) return;
+    lastMqttTry = now;
+    if (mqttHandler.reconnect()) {
+        mqttRetryMs = MQTT_RETRY_MIN_MS;
+    } else {
+        mqttRetryMs = min(mqttRetryMs * 2, MQTT_RETRY_MAX_MS);
+        LOGF("[MQTT] Thử lại sau %lus\n", mqttRetryMs / 1000);
     }
 }
 
@@ -211,7 +244,7 @@ void loop() {
     checkButtonHold();
     checkLinks();
 
-    // Giữ phiên MQTT đang sống. Nối lại nằm trong checkLinks, mỗi 5 phút.
+    // Giữ phiên MQTT đang sống. Nối lại nằm trong checkLinks.
     mqttHandler.handle();
 
     // Đẩy Serial log đã xếp hàng lên MQTT topic fish/<id>/log

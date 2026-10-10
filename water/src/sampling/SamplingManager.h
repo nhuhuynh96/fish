@@ -4,14 +4,17 @@
 #include <Arduino.h>
 #include <queue>
 
-enum FillLevel {
-    FILL_LEVEL_LOW = 1,  // phao 1 — GPIO17
-    FILL_LEVEL_HIGH = 2  // phao 2 — GPIO4
-};
-
+// target: 0 = chỉ chạy theo thời gian, 1 = phao 1 (GPIO17), 2 = phao 2 (GPIO4)
 struct PendingCommand {
     String action = "";
-    FillLevel fillLevel = FILL_LEVEL_LOW;
+    uint8_t target = 0;
+    uint32_t durationMs = 60000;
+};
+
+enum ActiveJob {
+    JOB_NONE = 0,
+    JOB_INLET,
+    JOB_DRAIN
 };
 
 class SamplingManager {
@@ -31,24 +34,17 @@ public:
 private:
     std::queue<PendingCommand> commandQueue;
 
-    FillLevel fillLevel = FILL_LEVEL_LOW;
-    unsigned long inletSince = 0;
-    uint8_t inletAttempt = 0;
-
-    unsigned long drainSince = 0;
-    unsigned long drainEmptySince = 0;
-    unsigned long floatLowSince = 0;
-    unsigned long floatHighSince = 0;
-
-    const unsigned long DRAIN_SAFETY_TIME = 180000;
-    const unsigned long INLET_FIXED_TIME = 30000;
-    static const uint8_t INLET_ATTEMPTS = 2;
+    ActiveJob activeJob = JOB_NONE;
+    uint8_t jobTarget = 0;
+    unsigned long jobStartedMs = 0;
+    unsigned long jobDurationMs = 0;
+    unsigned long targetSince = 0;
 
     const unsigned long FLOAT_DEBOUNCE_TIME = 800;
     const unsigned long PUMP_FLOAT_GRACE_MS = 1000;
 
     const uint8_t INLET_PUMP_PIN = 18;
-    const uint8_t DRAIN_VALVE_PIN = 19;
+    const uint8_t DRAIN_PUMP_PIN = 19;
 
     const uint8_t FLOAT_HIGH_PIN = 4;   // phao 2
     const uint8_t FLOAT_LOW_PIN = 17;   // phao 1
@@ -58,27 +54,25 @@ private:
     const uint8_t FLOAT_HIGH_ACTIVE = LOW;
 
     void processHead();
-    void finishCommand();
     void clearLocked(bool emit);
     void stopHardware();
+    void stopJob(const String &stage, const String &message);
 
-    void applyHeadFillLevel();
-    void hanldeInletOn(FillLevel level);
-    void hanldeDrainOn();
+    void hanldeInletOn(uint8_t target, uint32_t durationMs);
+    void hanldeDrainOn(uint8_t target, uint32_t durationMs);
     void handlePump();
 
     bool float1Active() const;
     bool float2Active() const;
-    bool isWaterLow() const;
+    bool floatActive(uint8_t n) const;
     int currentLevel() const;
     bool isInletOn() const;
     bool isDrainOn() const;
     void setInletPump(bool enabled);
-    void setDrainValve(bool enabled);
-    const char *fillLevelName(FillLevel level) const;
+    void setDrainPump(bool enabled);
+    String targetName(uint8_t target) const;
 
-    void emitEvent(const String &stage, const String &message, const String &extraJson = "");
-    void emitStage(const String &stage, const String &message, int target);
+    void emitEvent(const String &stage, const String &message, uint8_t target = 0, uint32_t durationMs = 0);
 };
 
 extern SamplingManager samplingManager;

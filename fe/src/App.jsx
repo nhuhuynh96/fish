@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api, createWebSocket } from './services/api';
 import Header from './components/Header';
 import NavMenu from './components/NavMenu';
@@ -15,6 +15,18 @@ import KitLogPanel from './components/KitLogPanel';
 import DeviceLogStream from './components/DeviceLogStream';
 
 const HISTORY_LIMIT = 100;
+const SENSOR_ID = 'sensor';
+const WATER_ID = 'water';
+
+function isBoard(id) {
+  return id === SENSOR_ID || id === WATER_ID;
+}
+
+function mergeEvents(sensorEvents, waterEvents) {
+  return [...(sensorEvents || []), ...(waterEvents || [])]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, 25);
+}
 
 function mergeMeasurement(prev, incoming) {
   if (!prev) return incoming;
@@ -71,40 +83,49 @@ function applyPumpFromEvent(payload, setInletOn, setDrainOn) {
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [devices, setDevices] = useState([]);
-  const [selectedDevice, setSelectedDevice] = useState('esp32_4b70');
   const [wsConnected, setWsConnected] = useState(false);
   const [latestMeasurement, setLatestMeasurement] = useState(null);
   const [history, setHistory] = useState([]);
   const [events, setEvents] = useState([]);
   const [deviceLogs, setDeviceLogs] = useState([]);
   const [currentState, setCurrentState] = useState('IDLE');
-  const [deviceStatus, setDeviceStatus] = useState({ online: true });
+  const [jobPhase, setJobPhase] = useState(-1);
+  const jobPhaseRef = useRef(-1);
+  const setPhase = (phase) => {
+    jobPhaseRef.current = phase;
+    setJobPhase(phase);
+  };
   const [pondConfig, setPondConfig] = useState(null);
   const [inletOn, setInletOn] = useState(false);
   const [drainOn, setDrainOn] = useState(false);
 
-  const loadData = useCallback(async (devId) => {
+  const loadData = useCallback(async () => {
     try {
       const devs = await api.getDevices();
       setDevices(devs);
 
-      let activeId = devId;
-      if (devs && devs.length > 0) {
-        const found = devs.find((d) => d.id === devId);
-        if (!found) {
-          activeId = devs[0].id;
-          setSelectedDevice(activeId);
-        }
-      }
-
-      const latest = await api.getLatest(activeId);
+      const latest = await api.getLatest(SENSOR_ID);
       if (latest) setLatestMeasurement(latest);
 
-      const hist = await api.getHistory(activeId, HISTORY_LIMIT);
+      const hist = await api.getHistory(SENSOR_ID, HISTORY_LIMIT);
       setHistory(hist);
 
-      const evts = await api.getEvents(activeId, 25);
-      setEvents(evts);
+      const [sensorEvents, waterEvents] = await Promise.all([
+        api.getEvents(SENSOR_ID, 25),
+        api.getEvents(WATER_ID, 25),
+      ]);
+      const merged = mergeEvents(sensorEvents, waterEvents);
+      setEvents(merged);
+
+      let inlet = false;
+      let drain = false;
+      [...merged].reverse().forEach((evt) => {
+        if (evt.device_id === WATER_ID) {
+          applyPumpFromEvent(evt, (v) => { inlet = v; }, (v) => { drain = v; });
+        }
+      });
+      setInletOn(inlet);
+      setDrainOn(drain);
 
       try {
         const pond = await api.getPondConfig();
@@ -118,11 +139,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadData(selectedDevice);
-    setDeviceLogs([]);
-    setInletOn(false);
-    setDrainOn(false);
-  }, [selectedDevice, loadData]);
+    loadData();
+  }, [loadData]);
 
   useEffect(() => {
     const cleanup = createWebSocket(
@@ -130,18 +148,27 @@ export default function App() {
         const { type, payload } = msg;
 
         if (type === 'sensor_data') {
-          if (payload.device_id === selectedDevice) {
+          if (payload.device_id === SENSOR_ID) {
             setLatestMeasurement((prev) => mergeMeasurement(prev, payload));
             setHistory((prev) => [payload, ...prev.slice(0, HISTORY_LIMIT - 1)]);
-            setCurrentState('IDLE');
           }
         } else if (type === 'sampling_event') {
-          if (payload.device_id === selectedDevice) {
+          if (isBoard(payload.device_id)) {
             setEvents((prev) => [payload, ...prev.slice(0, 29)]);
-            if (payload.state) {
-              setCurrentState(payload.state);
+            const jobStages = ['fill', 'drain_level', 'measure', 'final_drain'];
+            if (payload.stage === 'fill' || payload.stage === 'drain_level') setPhase(0);
+            else if (payload.stage === 'measure') setPhase(1);
+            else if (payload.stage === 'final_drain') setPhase(2);
+            else if (payload.stage === 'job_done' || payload.stage === 'job_failed') {
+              setPhase(-1);
+              setCurrentState('IDLE');
             }
-            applyPumpFromEvent(payload, setInletOn, setDrainOn);
+            if (jobStages.includes(payload.stage)) {
+              setCurrentState('MEASURING');
+            }
+            if (payload.device_id === WATER_ID) {
+              applyPumpFromEvent(payload, setInletOn, setDrainOn);
+            }
           }
         } else if (type === 'device_status') {
           setDevices((prev) => {
@@ -149,16 +176,13 @@ export default function App() {
             if (!exists) return [...prev, payload];
             return prev.map((d) => (d.id === payload.id ? { ...d, ...payload } : d));
           });
-          if (payload.id === selectedDevice) {
-            setDeviceStatus(payload);
-            if (payload.state) {
-              setCurrentState(payload.state);
-            }
+          if (payload.id === SENSOR_ID && payload.state && jobPhaseRef.current < 0) {
+            setCurrentState(payload.state);
           }
         } else if (type === 'pond_config_updated') {
           setPondConfig(payload);
         } else if (type === 'device_log') {
-          if (payload.device_id === selectedDevice) {
+          if (isBoard(payload.device_id)) {
             setDeviceLogs((prev) => [...prev.slice(-199), payload]);
           }
         }
@@ -167,22 +191,24 @@ export default function App() {
     );
 
     return cleanup;
-  }, [selectedDevice]);
+  }, []);
 
   const handleMeasure = async (sensors) => {
     try {
-      await api.triggerMeasure(selectedDevice, sensors);
+      const res = await api.triggerMeasure(SENSOR_ID, sensors);
+      if (res?.error) alert('Chưa đo: ' + res.error);
     } catch (e) {
       console.error('Trigger measure error:', e);
       alert('Không thể gửi lệnh đo tới Server: ' + e.message);
     }
   };
 
-  const handlePump = async (target, state, level = 2) => {
+  const handlePump = async (target, state, level = 0, duration = 0) => {
     if (target === 'inlet') setInletOn(state);
     if (target === 'drain') setDrainOn(state);
     try {
-      await api.setPump(selectedDevice, target, state, level);
+      const res = await api.setPump(WATER_ID, target, state, level, duration);
+      if (res?.error) throw new Error(res.error);
     } catch (e) {
       if (target === 'inlet') setInletOn(!state);
       if (target === 'drain') setDrainOn(!state);
@@ -194,7 +220,7 @@ export default function App() {
     setInletOn(false);
     setDrainOn(false);
     try {
-      await api.clearQueue(selectedDevice);
+      await api.clearQueue(WATER_ID);
     } catch (e) {
       console.error('Clear queue error:', e);
       alert('Không thể gửi lệnh xóa queue: ' + e.message);
@@ -203,7 +229,7 @@ export default function App() {
 
   const handleSetSchedule = async (scheduleData) => {
     try {
-      return await api.setSchedule(selectedDevice, scheduleData);
+      return await api.setSchedule(SENSOR_ID, scheduleData);
     } catch (e) {
       console.error('Set schedule error:', e);
       throw e;
@@ -212,21 +238,22 @@ export default function App() {
 
   const handleToggleAuto = async (enabled) => {
     try {
-      return await api.toggleAuto(selectedDevice, enabled);
+      return await api.toggleAuto(SENSOR_ID, enabled);
     } catch (e) {
       console.error('Toggle auto error:', e);
       throw e;
     }
   };
 
+  const sensorOnline = devices.find((d) => d.id === SENSOR_ID)?.online ?? false;
+  const waterOnline = devices.find((d) => d.id === WATER_ID)?.online ?? false;
+
   return (
     <div className="app-container">
       <Header
-        devices={devices}
-        selectedDevice={selectedDevice}
-        setSelectedDevice={setSelectedDevice}
+        sensorOnline={sensorOnline}
+        waterOnline={waterOnline}
         wsConnected={wsConnected}
-        deviceStatus={deviceStatus}
         currentState={currentState}
       />
 
@@ -237,7 +264,7 @@ export default function App() {
           <SensorCards measurement={latestMeasurement} pondConfig={pondConfig} />
 
           <AdvicePanel
-            deviceId={selectedDevice}
+            deviceId={SENSOR_ID}
             onPump={handlePump}
             pondConfig={pondConfig}
             onPondConfigChange={setPondConfig}
@@ -246,7 +273,7 @@ export default function App() {
           <SensorTrendChart history={history} />
 
           <LiveSamplingTimeline
-            currentState={currentState}
+            jobPhase={jobPhase}
             latestEvent={events.length > 0 ? events[0] : null}
           />
 
@@ -268,14 +295,14 @@ export default function App() {
 
       {activeTab === 'kit' && (
         <section className="page-section">
-          <KitLogPanel deviceId={selectedDevice} />
+          <KitLogPanel deviceId={SENSOR_ID} />
         </section>
       )}
 
       {activeTab === 'schedule' && (
         <section className="page-section">
           <SchedulePanel
-            deviceId={selectedDevice}
+            deviceId={SENSOR_ID}
             onSetSchedule={handleSetSchedule}
             onToggleAuto={handleToggleAuto}
           />
@@ -285,7 +312,7 @@ export default function App() {
       {activeTab === 'calibration' && (
         <section className="page-section">
           <CalibrationPanel
-            deviceId={selectedDevice}
+            deviceId={SENSOR_ID}
             latestMeasurement={latestMeasurement}
           />
         </section>

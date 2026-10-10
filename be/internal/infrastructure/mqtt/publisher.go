@@ -19,17 +19,8 @@ func NewCommandPublisher(client *Client) *CommandPublisher {
 
 var _ fish.CommandPublisher = (*CommandPublisher)(nil)
 
-func (p *CommandPublisher) publishCommand(deviceID, action string, level int) error {
+func (p *CommandPublisher) publish(deviceID string, body map[string]any) error {
 	topic := fmt.Sprintf("fish/%s/command", deviceID)
-	body := map[string]any{
-		"action": action,
-	}
-	if action == "inlet_on" {
-		if level != 1 {
-			level = 2
-		}
-		body["level"] = level
-	}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -37,9 +28,13 @@ func (p *CommandPublisher) publishCommand(deviceID, action string, level int) er
 	return p.client.Publish(topic, payload)
 }
 
+func (p *CommandPublisher) publishCommand(deviceID, action string) error {
+	return p.publish(deviceID, map[string]any{"action": action})
+}
+
 func (p *CommandPublisher) PublishLevel(ctx context.Context, deviceID string) error {
 	_ = ctx
-	return p.publishCommand(deviceID, "level", 0)
+	return p.publishCommand(deviceID, "level")
 }
 
 func (p *CommandPublisher) PublishMeasure(ctx context.Context, deviceID string, sensors []string) error {
@@ -49,7 +44,7 @@ func (p *CommandPublisher) PublishMeasure(ctx context.Context, deviceID string, 
 		return fmt.Errorf("no supported sensors in %v", sensors)
 	}
 	for _, action := range actions {
-		if err := p.publishCommand(deviceID, action, 0); err != nil {
+		if err := p.publishCommand(deviceID, action); err != nil {
 			return err
 		}
 	}
@@ -86,26 +81,29 @@ func expandMeasureActions(sensors []string) []string {
 	return out
 }
 
-func (p *CommandPublisher) PublishPump(ctx context.Context, deviceID string, target string, state bool, level int) error {
+// level 0 và duration 0 thì không gửi, firmware chạy theo thời gian mặc định 60 giây.
+func (p *CommandPublisher) PublishPump(ctx context.Context, deviceID string, target string, state bool, level, duration int) error {
 	_ = ctx
+	prefix := "inlet"
 	if target == "drain" {
-		if state {
-			return p.publishCommand(deviceID, "drain_on", 0)
-		}
-		return p.publishCommand(deviceID, "drain_off", 0)
+		prefix = "drain"
 	}
 	if !state {
-		return p.publishCommand(deviceID, "inlet_off", 0)
+		return p.publishCommand(deviceID, prefix+"_off")
 	}
-	if level != 1 {
-		level = 2
+	body := map[string]any{"action": prefix + "_on"}
+	if level == 1 || level == 2 {
+		body["level"] = level
 	}
-	return p.publishCommand(deviceID, "inlet_on", level)
+	if duration > 0 {
+		body["duration"] = duration
+	}
+	return p.publish(deviceID, body)
 }
 
 func (p *CommandPublisher) PublishClearQueue(ctx context.Context, deviceID string) error {
 	_ = ctx
-	return p.publishCommand(deviceID, "clear_queue", 0)
+	return p.publishCommand(deviceID, "clear_queue")
 }
 
 func (p *CommandPublisher) PublishSchedule(ctx context.Context, deviceID string, enabled bool, temp, ph, turb, tds int) error {

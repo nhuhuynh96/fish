@@ -12,10 +12,14 @@ import (
 )
 
 const (
-	waterDeviceID   = "water"
-	sensorDeviceID  = "sensor"
-	waterWaitLimit  = 4 * time.Minute
-	sensorWaitLimit = 60 * time.Second
+	waterDeviceID         = "water"
+	sensorDeviceID        = "sensor"
+	levelWaitLimit        = 30 * time.Second
+	waterWaitSlack        = 30 * time.Second
+	sensorWaitLimit       = 60 * time.Second
+	fillDurationS         = 180
+	drainToLevelDurationS = 120
+	finalDrainDurationS   = 60
 )
 
 type waterSig struct {
@@ -107,84 +111,117 @@ func (s *Service) finishJob() {
 	s.jobMu.Unlock()
 }
 
-func (s *Service) runMeasure(pondID string, sensors []string) {
+func (s *Service) runMeasure(_ string, sensors []string) {
 	defer s.finishJob()
 	ctx := context.Background()
 	want := normalizeSensors(sensors)
 	if len(want) == 0 {
-		s.recordJob(ctx, pondID, "job_failed", "Không có chỉ số đo được hỗ trợ.")
+		s.recordJob(ctx, sensorDeviceID, "job_failed", "Không có chỉ số đo được hỗ trợ.")
 		return
 	}
-	log.Printf("[MeasureJob] hồ %s đo %v", pondID, want)
+	log.Printf("[MeasureJob] đo %v: chỉnh mực theo từng sensor, đo, rồi xả %ds", want, finalDrainDurationS)
 
-	if contains(want, "temp") || contains(want, "ph") {
-		if err := s.ensureLevel(ctx, 1); err != nil {
-			s.recordJob(ctx, pondID, "job_failed", err.Error())
-			return
+	var measureErr error
+	for _, action := range want {
+		if err := s.ensureLevel(ctx, sensorFillLevel(action)); err != nil {
+			measureErr = fmt.Errorf("%s: %w", sensorLabel(action), err)
+			break
 		}
-		if contains(want, "temp") {
-			if err := s.measureOne(ctx, "temp"); err != nil {
-				s.recordJob(ctx, pondID, "job_failed", err.Error())
-				return
-			}
-		}
-		if contains(want, "ph") {
-			if err := s.measureOne(ctx, "ph"); err != nil {
-				s.recordJob(ctx, pondID, "job_failed", err.Error())
-				return
-			}
+		s.recordJob(ctx, sensorDeviceID, "measure", fmt.Sprintf("Đo %s.", sensorLabel(action)))
+		if err := s.measureOne(ctx, action); err != nil {
+			measureErr = err
+			break
 		}
 	}
-	if contains(want, "tds") {
-		if err := s.ensureLevel(ctx, 2); err != nil {
-			s.recordJob(ctx, pondID, "job_failed", err.Error())
-			return
-		}
-		if err := s.measureOne(ctx, "tds"); err != nil {
-			s.recordJob(ctx, pondID, "job_failed", err.Error())
-			return
-		}
+
+	s.recordJob(ctx, waterDeviceID, "final_drain", fmt.Sprintf("Xả nước %d giây sau khi đo.", finalDrainDurationS))
+	if err := s.runWater(ctx, "drain", 0, finalDrainDurationS); err != nil && measureErr == nil {
+		measureErr = fmt.Errorf("xả nước: %w", err)
 	}
-	s.recordJob(ctx, pondID, "job_done", "Đo xong.")
+	if measureErr != nil {
+		s.recordJob(ctx, sensorDeviceID, "job_failed", measureErr.Error())
+		return
+	}
+	s.recordJob(ctx, sensorDeviceID, "job_done", "Đo xong.")
 }
 
-func (s *Service) ensureLevel(ctx context.Context, target int) error {
+func (s *Service) queryLevel(ctx context.Context) (int, error) {
 	ch := s.armWater()
 	if err := s.pub.PublishLevel(ctx, waterDeviceID); err != nil {
+		return 0, err
+	}
+	sig, err := waitWater(ctx, ch, levelWaitLimit, func(sig waterSig) bool {
+		return sig.Stage == "water_level"
+	})
+	if err != nil {
+		return 0, err
+	}
+	return sig.Level, nil
+}
+
+// level 0: chạy đủ duration, chờ time_up. level 1/2: chờ tới phao, time_up là lỗi.
+func (s *Service) runWater(ctx context.Context, target string, level, durationS int) error {
+	ch := s.armWater()
+	if err := s.pub.PublishPump(ctx, waterDeviceID, target, true, level, durationS); err != nil {
 		return err
 	}
-	sig, err := waitWater(ctx, ch, func(sig waterSig) bool {
-		return sig.Stage == "water_level"
+	limit := time.Duration(durationS)*time.Second + waterWaitSlack
+	sig, err := waitWater(ctx, ch, limit, func(sig waterSig) bool {
+		switch sig.Stage {
+		case "time_up", "already_at_level", "pump_off", "drain_off", "queue_cleared":
+			return true
+		case "filled":
+			return target == "inlet"
+		case "drained":
+			return target == "drain"
+		}
+		return false
 	})
 	if err != nil {
 		return err
 	}
-	if sig.Level == target {
-		log.Printf("[MeasureJob] nước đã ở level %d", target)
-		return nil
-	}
-	if sig.Level > target {
-		ch = s.armWater()
-		if err := s.pub.PublishPump(ctx, waterDeviceID, "drain", true, 0); err != nil {
-			return err
+	switch sig.Stage {
+	case "pump_off", "drain_off", "queue_cleared":
+		if level > 0 {
+			return fmt.Errorf("bơm bị tắt giữa chừng (%s)", sig.Stage)
 		}
-		if _, err := waitWater(ctx, ch, func(sig waterSig) bool {
-			return sig.Stage == "drained" && sig.Level == 0
-		}); err != nil {
-			return err
+	case "time_up":
+		if level > 0 {
+			return fmt.Errorf("không tới phao %d trong %d giây", level, durationS)
 		}
 	}
-	ch = s.armWater()
-	if err := s.pub.PublishPump(ctx, waterDeviceID, "inlet", true, target); err != nil {
+	return nil
+}
+
+func (s *Service) ensureLevel(ctx context.Context, target int) error {
+	if target != 1 && target != 2 {
+		return fmt.Errorf("mức nước %d không hỗ trợ", target)
+	}
+	level, err := s.queryLevel(ctx)
+	if err != nil {
 		return err
 	}
-	_, err = waitWater(ctx, ch, func(sig waterSig) bool {
-		if sig.Stage == "already_at_level" || sig.Stage == "filled" {
-			return sig.Level == target
+	if target == 1 && level == 2 {
+		s.recordJob(ctx, waterDeviceID, "drain_level", "Mực ở phao 2. Xả tới khi phao 2 tắt.")
+		if err := s.runWater(ctx, "drain", 2, drainToLevelDurationS); err != nil {
+			return fmt.Errorf("xả nước: %w", err)
 		}
-		return false
-	})
-	return err
+		if level, err = s.queryLevel(ctx); err != nil {
+			return err
+		}
+		if level == 2 {
+			return fmt.Errorf("xả xong vẫn ở phao 2")
+		}
+	}
+	if level >= target {
+		log.Printf("[MeasureJob] nước đã ở phao %d", level)
+		return nil
+	}
+	s.recordJob(ctx, waterDeviceID, "fill", fmt.Sprintf("Bơm nạp tới phao %d.", target))
+	if err := s.runWater(ctx, "inlet", target, fillDurationS); err != nil {
+		return fmt.Errorf("bơm nạp: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) measureOne(ctx context.Context, action string) error {
@@ -200,13 +237,13 @@ func (s *Service) measureOne(ctx context.Context, action string) error {
 	return err
 }
 
-func waitWater(ctx context.Context, ch <-chan waterSig, accept func(waterSig) bool) (waterSig, error) {
-	timer := time.NewTimer(waterWaitLimit)
+func waitWater(ctx context.Context, ch <-chan waterSig, limit time.Duration, accept func(waterSig) bool) (waterSig, error) {
+	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	for {
 		select {
 		case sig := <-ch:
-			if sig.Stage == "fill_timeout" || sig.Stage == "drain_timeout" || sig.Stage == "command_error" {
+			if sig.Stage == "command_error" {
 				return sig, fmt.Errorf("water %s", sig.Stage)
 			}
 			if accept(sig) {
@@ -264,16 +301,30 @@ func (s *Service) recordJob(ctx context.Context, pondID, stage, message string) 
 	}
 }
 
+func sensorFillLevel(action string) int {
+	if action == "tds" {
+		return 2
+	}
+	return 1
+}
+
+func sensorLabel(action string) string {
+	switch action {
+	case "ph":
+		return "pH"
+	case "temp":
+		return "nhiệt độ"
+	case "tds":
+		return "TDS"
+	default:
+		return action
+	}
+}
+
+// Thứ tự cố định temp, pH, TDS: nhóm phao 1 đo trước, TDS phao 2 đo sau.
 func normalizeSensors(sensors []string) []string {
 	seen := map[string]bool{}
-	var out []string
-	add := func(name string) {
-		if seen[name] {
-			return
-		}
-		seen[name] = true
-		out = append(out, name)
-	}
+	add := func(name string) { seen[name] = true }
 	for _, raw := range sensors {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "all", "tat_ca", "measure_all":
@@ -286,6 +337,12 @@ func normalizeSensors(sensors []string) []string {
 			add("temp")
 		case "tds":
 			add("tds")
+		}
+	}
+	var out []string
+	for _, name := range []string{"temp", "ph", "tds"} {
+		if seen[name] {
+			out = append(out, name)
 		}
 	}
 	return out

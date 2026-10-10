@@ -41,13 +41,13 @@ func (h *FishHandler) Measure(c *gin.Context) {
 		req.Sensors = []string{"all"}
 	}
 
-	if err := h.svc.TriggerMeasurement(c.Request.Context(), deviceID, req.Sensors); err != nil {
+	if err := h.svc.MeasureNow(c.Request.Context(), req.Sensors); err != nil {
 		respond.InternalError(c, err.Error())
 		return
 	}
 
 	respond.OK(c, gin.H{
-		"message": "Measurement command sent to ESP32",
+		"message": "Measurement command sent to sensor",
 		"device":  deviceID,
 		"sensors": req.Sensors,
 	})
@@ -62,9 +62,10 @@ func (h *FishHandler) Pump(c *gin.Context) {
 	}
 
 	var req struct {
-		Target string `json:"target"` // "inlet" | "drain"
-		State  bool   `json:"state"`
-		Level  int    `json:"level"` // inlet: 1 = phao 1, 2 = phao 2
+		Target   string `json:"target"` // "inlet" | "drain"
+		State    bool   `json:"state"`
+		Level    int    `json:"level"`    // 0 = theo thời gian, 1 = phao 1, 2 = phao 2
+		Duration int    `json:"duration"` // giây, 0 = mặc định 60 của firmware, tối đa 300
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respond.BadRequest(c, "invalid body: target and state required")
@@ -77,7 +78,17 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State, req.Level); err != nil {
+	if req.Level < 0 || req.Level > 2 {
+		req.Level = 0
+	}
+	if req.Duration < 0 {
+		req.Duration = 0
+	}
+	if req.Duration > 300 {
+		req.Duration = 300
+	}
+
+	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State, req.Level, req.Duration); err != nil {
 		respond.InternalError(c, err.Error())
 		return
 	}
@@ -93,12 +104,13 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		action = "inlet_on"
 	}
 	respond.OK(c, gin.H{
-		"message": "Pump command sent",
-		"device":  deviceID,
-		"target":  target,
-		"state":   req.State,
-		"level":   req.Level,
-		"action":  action,
+		"message":  "Pump command sent",
+		"device":   deviceID,
+		"target":   target,
+		"state":    req.State,
+		"level":    req.Level,
+		"duration": req.Duration,
+		"action":   action,
 	})
 }
 

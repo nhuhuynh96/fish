@@ -10,7 +10,9 @@
 
 const int BUTTON_PIN = 0;
 const unsigned long BUTTON_HOLD_TIME = 3000;
-const unsigned long LINK_CHECK_MS = 5UL * 60UL * 1000UL;
+const unsigned long WIFI_RETRY_MS = 30000;
+const unsigned long MQTT_RETRY_MIN_MS = 5000;
+const unsigned long MQTT_RETRY_MAX_MS = 60000;
 
 unsigned long buttonPressStartTime = 0;
 bool buttonIsPressed = false;
@@ -94,7 +96,7 @@ void setup() {
         LOGF("[Main] IP: %s\n", WiFi.localIP().toString().c_str());
         mqttHandler.reconnect();
     } else {
-        LOGLN("[Main] WiFi chưa lên. Giữ STA, thử lại mỗi 5 phút.");
+        LOGLN("[Main] WiFi chưa lên. Giữ STA, thử lại mỗi 30 giây.");
     }
 }
 
@@ -113,23 +115,35 @@ void checkButtonHold() {
     }
 }
 
-static unsigned long lastLinkCheck = 0;
+static unsigned long lastWifiTry = 0;
+static unsigned long lastMqttTry = 0;
+static unsigned long mqttRetryMs = MQTT_RETRY_MIN_MS;
 
 static void checkLinks() {
     unsigned long now = millis();
-    if (now - lastLinkCheck < LINK_CHECK_MS) return;
-    lastLinkCheck = now;
 
     if (WiFi.status() != WL_CONNECTED) {
-        LOGLN("[WiFi] Mất kết nối. Đang nối lại...");
-        WiFi.mode(WIFI_STA);
-        WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
+        if (now - lastWifiTry >= WIFI_RETRY_MS) {
+            lastWifiTry = now;
+            LOGLN("[WiFi] Mất kết nối. Đang nối lại...");
+            WiFi.mode(WIFI_STA);
+            WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
+        }
         return;
     }
 
-    LOGF("[WiFi] Còn kết nối. IP: %s\n", WiFi.localIP().toString().c_str());
-    if (!mqttHandler.isConnected()) {
-        mqttHandler.reconnect();
+    if (mqttHandler.isConnected()) {
+        mqttRetryMs = MQTT_RETRY_MIN_MS;
+        return;
+    }
+
+    if (now - lastMqttTry < mqttRetryMs) return;
+    lastMqttTry = now;
+    if (mqttHandler.reconnect()) {
+        mqttRetryMs = MQTT_RETRY_MIN_MS;
+    } else {
+        mqttRetryMs = min(mqttRetryMs * 2, MQTT_RETRY_MAX_MS);
+        LOGF("[MQTT] Thử lại sau %lus\n", mqttRetryMs / 1000);
     }
 }
 

@@ -122,9 +122,9 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
     }
   };
 
-  const handlePump = async (target, state) => {
+  const handlePump = async (target, state, level = 0) => {
     if (!onPump) return;
-    await onPump(target, state);
+    await onPump(target, state, level);
   };
 
   return (
@@ -296,7 +296,7 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
                     <button className="btn btn-secondary" type="button" onClick={() => handlePump('drain', true)}>
                       Mở van xả
                     </button>
-                    <button className="btn btn-secondary" type="button" onClick={() => handlePump('inlet', true)}>
+                    <button className="btn btn-secondary" type="button" onClick={() => handlePump('inlet', true, 2)}>
                       Mở van nạp
                     </button>
                     <span className="advice-action-hw-note">

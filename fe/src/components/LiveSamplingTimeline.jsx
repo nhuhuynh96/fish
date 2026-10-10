@@ -1,22 +1,16 @@
 import React from 'react';
 
-export default function LiveSamplingTimeline({ currentState, latestEvent }) {
+export default function LiveSamplingTimeline({ jobPhase, latestEvent }) {
   const steps = [
-    { key: 'FILLING_WATER', label: '1. Bơm Nạp', desc: 'Phao 1 (pH) hoặc phao 2 (TDS)' },
-    { key: 'STABILIZING', label: '2. Đo Cảm Biến', desc: 'Đọc ADC theo cảm biến đã chọn' },
-    { key: 'DRAINING_WATER', label: '3. Xả Nước', desc: 'Xuống mức 1 hoặc xả 30s cuối' },
+    { key: 'fill', label: '1. Chỉnh mực', desc: 'Nhiệt độ và pH: phao 1. TDS: phao 2' },
+    { key: 'measure', label: '2. Đo', desc: 'Từng sensor' },
+    { key: 'final_drain', label: '3. Xả 60s', desc: 'Sau khi đo xong' },
   ];
 
-  const getStepStatus = (stepKey, index) => {
-    if (!currentState || currentState === 'IDLE') return '';
-    const stateOrder = ['FILLING_WATER', 'STABILIZING', 'DRAINING_WATER'];
-    let mapped = currentState;
-    if (currentState === 'MEASURING' || currentState === 'PUBLISHING') mapped = 'STABILIZING';
-    const currentIndex = stateOrder.indexOf(mapped);
-
-    if (currentIndex === -1) return '';
-    if (currentIndex === index) return 'active';
-    if (currentIndex > index) return 'completed';
+  const getStepStatus = (index) => {
+    if (jobPhase < 0) return '';
+    if (jobPhase === index) return 'active';
+    if (jobPhase > index) return 'completed';
     return '';
   };
 
@@ -29,12 +23,12 @@ export default function LiveSamplingTimeline({ currentState, latestEvent }) {
         Tiến Trình Đo Cảm Biến
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-        pH: căn phao 1 (chưa đầy phao 2). TDS: đầy phao 2. Nhiệt độ đo thẳng, không bơm.
+        Lịch đo tự động: nhiệt độ và pH ở phao 1, TDS ở phao 2. Thiếu thì bơm, dư thì xả. Đo xong xả 60 giây.
       </p>
 
       <div className="timeline-stepper">
         {steps.map((s, idx) => {
-          const status = getStepStatus(s.key, idx);
+          const status = getStepStatus(idx);
           return (
             <div key={s.key} className={`step-item ${status}`}>
               <div className="step-circle">

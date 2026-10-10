@@ -39,11 +39,11 @@ export const api = {
     return res.json();
   },
 
-  async setPump(deviceId, target, state, level = 2) {
+  async setPump(deviceId, target, state, level = 0, duration = 0) {
     const res = await fetch(`${API_BASE}/devices/${deviceId}/pump`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target, state, level }),
+      body: JSON.stringify({ target, state, level, duration }),
     });
     return res.json();
   },
