@@ -9,6 +9,18 @@ import (
 
 const DefaultPondConfigID = "default"
 
+const (
+	SystemPond = "pond"
+	SystemRAS  = "ras"
+)
+
+func NormalizeSystemType(s string) string {
+	if strings.ToLower(strings.TrimSpace(s)) == SystemRAS {
+		return SystemRAS
+	}
+	return SystemPond
+}
+
 type WaterThresholds struct {
 	TempMin       float64 `json:"temp_min"`
 	TempMax       float64 `json:"temp_max"`
@@ -33,6 +45,7 @@ type PondConfig struct {
 	VolumeL    float64                 `json:"volume_l"`
 	VolumeM3   float64                 `json:"volume_m3"`
 	HasFilter  bool                    `json:"has_filter"`
+	SystemType string                  `json:"system_type"`
 	Thresholds WaterThresholds         `json:"thresholds"`
 	Badges     map[string]MetricBadges `json:"badges"`
 	UpdatedAt  time.Time               `json:"updated_at"`
@@ -62,6 +75,7 @@ func (c *PondConfig) Normalize() *PondConfig {
 	if c.ID == "" {
 		c.ID = DefaultPondConfigID
 	}
+	c.SystemType = NormalizeSystemType(c.SystemType)
 	c.Species = strings.ToLower(strings.TrimSpace(c.Species))
 	if c.Species == "" {
 		c.Species = "ca_chinh"

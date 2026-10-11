@@ -60,8 +60,9 @@ func (c *Client) Narrate(ctx context.Context, result *advice.Result) (*advice.Na
 	}
 
 	sys := `Bạn là trợ lý hồ cá. Chỉ diễn giải dữ liệu JSON đã có.
-DO (do) và TAN/NH3 (tan, nh3_free) chỉ dùng khi có trong current — đó là số test kit thủ công, không phải cảm biến ESP.
-Không bịa cảm biến còn thiếu (NO2, NO3, KH/GH, hoặc DO/NH3 nếu current không có). Không đổi type/priority của actions.
+DO (do), TAN/NH3 (tan, nh3_free), nitrite (no2), nitrate (no3), KH (kh, dKH) chỉ dùng khi có trong current — đó là số test kit thủ công, không phải cảm biến ESP.
+Không bịa chỉ số còn thiếu (CO2, GH, hoặc các chỉ số kit nếu current không có). Không đổi type/priority của actions.
+Nếu profile.system_type = "ras": đây là hồ tuần hoàn RAS có lọc sinh học. pH tụt là do nitrat hóa ăn độ kiềm hoặc CO2 tích tụ, xử lý bằng châm bicarbonate hoặc tách khí; TDS/nitrate tăng dần là bình thường, xử lý bằng tăng thay nước nhỏ hằng ngày; không khuyên thay nước lớn trừ khi amonia/nitrite nguy hiểm; không cấm baking soda.
 Không nêu liều hóa chất theo gram nếu volume_l <= 0.
 Trả JSON: {"summary":"...","action_details":{"water_change_percent":"..."},"do_not":["..."]}
 summary: 1-2 câu tiếng Việt, nêu xu hướng (đang tăng/giảm) chứ không chỉ giá trị hiện tại. Nếu có NH3/DO kit thì nhắc trong summary.

@@ -145,6 +145,10 @@ func initSchema(db *sql.DB) error {
 			created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_kit_readings_device_measured ON kit_readings (device_id, measured_at DESC)`,
+		`ALTER TABLE kit_readings ADD COLUMN IF NOT EXISTS no2_mg_l DOUBLE PRECISION`,
+		`ALTER TABLE kit_readings ADD COLUMN IF NOT EXISTS no3_mg_l DOUBLE PRECISION`,
+		`ALTER TABLE kit_readings ADD COLUMN IF NOT EXISTS kh_dkh DOUBLE PRECISION`,
+		`ALTER TABLE pond_config ADD COLUMN IF NOT EXISTS system_type VARCHAR(16) NOT NULL DEFAULT 'pond'`,
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil {

@@ -115,13 +115,17 @@ export const api = {
     return json.data;
   },
 
-  async saveKitReading(deviceId, { do_mg_l, tan_mg_l, measured_at }) {
+  async saveKitReading(deviceId, { measured_at, ...values }) {
+    const num = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
     const res = await fetch(`${API_BASE}/devices/${deviceId}/kit-readings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        do_mg_l: do_mg_l === '' || do_mg_l == null ? null : Number(do_mg_l),
-        tan_mg_l: tan_mg_l === '' || tan_mg_l == null ? null : Number(tan_mg_l),
+        do_mg_l: num(values.do_mg_l),
+        tan_mg_l: num(values.tan_mg_l),
+        no2_mg_l: num(values.no2_mg_l),
+        no3_mg_l: num(values.no3_mg_l),
+        kh_dkh: num(values.kh_dkh),
         measured_at: measured_at || undefined,
       }),
     });

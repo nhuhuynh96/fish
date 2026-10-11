@@ -305,7 +305,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]fish.Device, error) {
 
 func (s *Store) GetPondConfig(ctx context.Context) (*fish.PondConfig, error) {
 	query := `
-		SELECT id, species, volume_l, has_filter,
+		SELECT id, species, volume_l, has_filter, system_type,
 		       temp_min, temp_max, ph_min, ph_max,
 		       turbidity_warn, turbidity_max, tds_min, tds_max, updated_at
 		FROM pond_config WHERE id = $1
@@ -313,7 +313,7 @@ func (s *Store) GetPondConfig(ctx context.Context) (*fish.PondConfig, error) {
 	row := s.db.QueryRowContext(ctx, query, fish.DefaultPondConfigID)
 	var c fish.PondConfig
 	err := row.Scan(
-		&c.ID, &c.Species, &c.VolumeL, &c.HasFilter,
+		&c.ID, &c.Species, &c.VolumeL, &c.HasFilter, &c.SystemType,
 		&c.Thresholds.TempMin, &c.Thresholds.TempMax, &c.Thresholds.PHMin, &c.Thresholds.PHMax,
 		&c.Thresholds.TurbidityWarn, &c.Thresholds.TurbidityMax, &c.Thresholds.TDSMin, &c.Thresholds.TDSMax,
 		&c.UpdatedAt,
@@ -336,12 +336,13 @@ func (s *Store) SavePondConfig(ctx context.Context, cfg *fish.PondConfig) error 
 		INSERT INTO pond_config (
 			id, species, volume_l, has_filter,
 			temp_min, temp_max, ph_min, ph_max,
-			turbidity_warn, turbidity_max, tds_min, tds_max, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			turbidity_warn, turbidity_max, tds_min, tds_max, updated_at, system_type
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT (id) DO UPDATE SET
 			species = EXCLUDED.species,
 			volume_l = EXCLUDED.volume_l,
 			has_filter = EXCLUDED.has_filter,
+			system_type = EXCLUDED.system_type,
 			temp_min = EXCLUDED.temp_min,
 			temp_max = EXCLUDED.temp_max,
 			ph_min = EXCLUDED.ph_min,
@@ -356,7 +357,7 @@ func (s *Store) SavePondConfig(ctx context.Context, cfg *fish.PondConfig) error 
 		cfg.ID, cfg.Species, cfg.VolumeL, cfg.HasFilter,
 		cfg.Thresholds.TempMin, cfg.Thresholds.TempMax, cfg.Thresholds.PHMin, cfg.Thresholds.PHMax,
 		cfg.Thresholds.TurbidityWarn, cfg.Thresholds.TurbidityMax, cfg.Thresholds.TDSMin, cfg.Thresholds.TDSMax,
-		cfg.UpdatedAt,
+		cfg.UpdatedAt, cfg.SystemType,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert pond_config: %w", err)
@@ -368,12 +369,12 @@ func (s *Store) SaveKitReading(ctx context.Context, r *fish.KitReading) error {
 	query := `
 		INSERT INTO kit_readings (
 			id, device_id, do_mg_l, tan_mg_l, nh3_free_mg_l, ph_used, temp_used,
-			source, measured_at, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			source, measured_at, created_at, no2_mg_l, no3_mg_l, kh_dkh
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 	_, err := s.db.ExecContext(ctx, query,
 		r.ID, r.DeviceID, r.DOMGL, r.TANMGL, r.NH3FreeMGL, r.PHUsed, r.TempUsed,
-		r.Source, r.MeasuredAt, r.CreatedAt,
+		r.Source, r.MeasuredAt, r.CreatedAt, r.NO2MGL, r.NO3MGL, r.KHDKH,
 	)
 	if err != nil {
 		return fmt.Errorf("insert kit_reading: %w", err)
@@ -387,7 +388,7 @@ func (s *Store) ListKitReadings(ctx context.Context, deviceID string, limit int)
 	}
 	return s.listKitReadings(ctx, `
 		SELECT id, device_id, do_mg_l, tan_mg_l, nh3_free_mg_l, ph_used, temp_used,
-			source, measured_at, created_at
+			source, measured_at, created_at, no2_mg_l, no3_mg_l, kh_dkh
 		FROM kit_readings WHERE device_id = $1
 		ORDER BY measured_at DESC LIMIT $2
 	`, deviceID, limit)
@@ -399,7 +400,7 @@ func (s *Store) ListKitReadingsSince(ctx context.Context, deviceID string, since
 	}
 	return s.listKitReadings(ctx, `
 		SELECT id, device_id, do_mg_l, tan_mg_l, nh3_free_mg_l, ph_used, temp_used,
-			source, measured_at, created_at
+			source, measured_at, created_at, no2_mg_l, no3_mg_l, kh_dkh
 		FROM kit_readings WHERE device_id = $1 AND measured_at >= $2
 		ORDER BY measured_at DESC LIMIT $3
 	`, deviceID, since, limit)
@@ -416,7 +417,7 @@ func (s *Store) listKitReadings(ctx context.Context, query string, args ...any) 
 		var r fish.KitReading
 		if err := rows.Scan(
 			&r.ID, &r.DeviceID, &r.DOMGL, &r.TANMGL, &r.NH3FreeMGL, &r.PHUsed, &r.TempUsed,
-			&r.Source, &r.MeasuredAt, &r.CreatedAt,
+			&r.Source, &r.MeasuredAt, &r.CreatedAt, &r.NO2MGL, &r.NO3MGL, &r.KHDKH,
 		); err != nil {
 			return nil, fmt.Errorf("scan kit_reading: %w", err)
 		}

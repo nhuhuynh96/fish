@@ -22,6 +22,9 @@ const (
 	finalDrainDurationS   = 60
 )
 
+// Đo pH ngay sau khi bơm cho kết quả cao hơn khoảng 0,5 do nước chưa ổn định.
+var waterSettleDelay = 45 * time.Second
+
 type waterSig struct {
 	Stage string
 	Level int
@@ -123,9 +126,17 @@ func (s *Service) runMeasure(_ string, sensors []string) {
 
 	var measureErr error
 	for _, action := range want {
-		if err := s.ensureLevel(ctx, sensorFillLevel(action)); err != nil {
+		moved, err := s.ensureLevel(ctx, sensorFillLevel(action))
+		if err != nil {
 			measureErr = fmt.Errorf("%s: %w", sensorLabel(action), err)
 			break
+		}
+		if moved && waterSettleDelay > 0 {
+			s.recordJob(ctx, waterDeviceID, "settle", fmt.Sprintf("Chờ nước ổn định %d giây rồi đo.", int(waterSettleDelay.Seconds())))
+			if err := sleepCtx(ctx, waterSettleDelay); err != nil {
+				measureErr = err
+				break
+			}
 		}
 		s.recordJob(ctx, sensorDeviceID, "measure", fmt.Sprintf("Đo %s.", sensorLabel(action)))
 		if err := s.measureOne(ctx, action); err != nil {
@@ -193,35 +204,48 @@ func (s *Service) runWater(ctx context.Context, target string, level, durationS 
 	return nil
 }
 
-func (s *Service) ensureLevel(ctx context.Context, target int) error {
+// moved = đã bơm hoặc xả, nước cần thời gian ổn định trước khi đo.
+func (s *Service) ensureLevel(ctx context.Context, target int) (moved bool, err error) {
 	if target != 1 && target != 2 {
-		return fmt.Errorf("mức nước %d không hỗ trợ", target)
+		return false, fmt.Errorf("mức nước %d không hỗ trợ", target)
 	}
 	level, err := s.queryLevel(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if target == 1 && level == 2 {
 		s.recordJob(ctx, waterDeviceID, "drain_level", "Mực ở phao 2. Xả tới khi phao 2 tắt.")
 		if err := s.runWater(ctx, "drain", 2, drainToLevelDurationS); err != nil {
-			return fmt.Errorf("xả nước: %w", err)
+			return true, fmt.Errorf("xả nước: %w", err)
 		}
+		moved = true
 		if level, err = s.queryLevel(ctx); err != nil {
-			return err
+			return moved, err
 		}
 		if level == 2 {
-			return fmt.Errorf("xả xong vẫn ở phao 2")
+			return moved, fmt.Errorf("xả xong vẫn ở phao 2")
 		}
 	}
 	if level >= target {
 		log.Printf("[MeasureJob] nước đã ở phao %d", level)
-		return nil
+		return moved, nil
 	}
 	s.recordJob(ctx, waterDeviceID, "fill", fmt.Sprintf("Bơm nạp tới phao %d.", target))
 	if err := s.runWater(ctx, "inlet", target, fillDurationS); err != nil {
-		return fmt.Errorf("bơm nạp: %w", err)
+		return true, fmt.Errorf("bơm nạp: %w", err)
 	}
-	return nil
+	return true, nil
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Service) measureOne(ctx context.Context, action string) error {

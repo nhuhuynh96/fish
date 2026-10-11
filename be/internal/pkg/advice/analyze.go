@@ -28,6 +28,11 @@ func NormalizeProfile(p Profile) Profile {
 	if p.VolumeL <= 0 {
 		p.VolumeL = 9000 // mặc định 9 khối
 	}
+	if strings.ToLower(strings.TrimSpace(p.SystemType)) == "ras" {
+		p.SystemType = "ras"
+	} else {
+		p.SystemType = "pond"
+	}
 	return p
 }
 
@@ -43,7 +48,7 @@ const kitFreshFor = 24 * time.Hour
 
 func AnalyzeWithKit(history []fish.Measurement, kits []fish.KitReading, profile Profile, th *Thresholds) *Result {
 	profile = NormalizeProfile(profile)
-	resolved := ThresholdsFor(profile.Species)
+	resolved := withSystemDefaults(profile.SystemType, ThresholdsFor(profile.Species))
 	if th != nil {
 		resolved = mergeThresholds(resolved, *th)
 	}
@@ -108,7 +113,7 @@ func latestKit(kits []fish.KitReading) *fish.KitReading {
 	var best *fish.KitReading
 	for i := range kits {
 		k := &kits[i]
-		if k.DOMGL == nil && k.TANMGL == nil {
+		if !k.HasAny() {
 			continue
 		}
 		if best == nil || k.MeasuredAt.After(best.MeasuredAt) {
@@ -118,6 +123,21 @@ func latestKit(kits []fish.KitReading) *fish.KitReading {
 	return best
 }
 
+type kitField struct {
+	metric string
+	digits int
+	get    func(*fish.KitReading) *float64
+}
+
+var kitFields = []kitField{
+	{"do", 1, func(k *fish.KitReading) *float64 { return k.DOMGL }},
+	{"tan", 2, func(k *fish.KitReading) *float64 { return k.TANMGL }},
+	{"no2", 2, func(k *fish.KitReading) *float64 { return k.NO2MGL }},
+	{"no3", 0, func(k *fish.KitReading) *float64 { return k.NO3MGL }},
+	{"kh", 1, func(k *fish.KitReading) *float64 { return k.KHDKH }},
+}
+
+// Mỗi chỉ số lấy mẫu mới nhất có giá trị, vì một lần nhập kit thường chỉ có vài chỉ số.
 func applyKit(res *Result, kits []fish.KitReading, ph, temp *float64) {
 	if res.Current == nil {
 		res.Current = map[string]*float64{}
@@ -127,8 +147,9 @@ func applyKit(res *Result, kits []fish.KitReading, ph, temp *float64) {
 	}
 	k := latestKit(kits)
 	if k == nil {
-		res.Trend["do"] = MetricTrend{Slope: "unknown"}
-		res.Trend["tan"] = MetricTrend{Slope: "unknown"}
+		for _, f := range kitFields {
+			res.Trend[f.metric] = MetricTrend{Slope: "unknown"}
+		}
 		res.Trend["nh3_free"] = MetricTrend{Slope: "unknown"}
 		return
 	}
@@ -138,61 +159,61 @@ func applyKit(res *Result, kits []fish.KitReading, ph, temp *float64) {
 		Stale:      stale,
 		Source:     "kit",
 	}
-	res.Current["do"] = roundPtr(k.DOMGL, 1)
-	res.Current["tan"] = roundPtr(k.TANMGL, 2)
-	tempC := 25.0
-	if temp != nil {
-		tempC = *temp
-	} else if k.TempUsed != nil {
-		tempC = *k.TempUsed
+
+	var latestTAN *fish.KitReading
+	for _, f := range kitFields {
+		var latest *fish.KitReading
+		n := 0
+		var first, last time.Time
+		for i := range kits {
+			row := &kits[i]
+			if f.get(row) == nil {
+				continue
+			}
+			n++
+			if first.IsZero() || row.MeasuredAt.Before(first) {
+				first = row.MeasuredAt
+			}
+			if last.IsZero() || row.MeasuredAt.After(last) {
+				last = row.MeasuredAt
+				latest = row
+			}
+		}
+		tr := MetricTrend{Slope: "unknown", N: n}
+		if latest != nil {
+			res.Current[f.metric] = roundPtr(f.get(latest), f.digits)
+			tr.Current = res.Current[f.metric]
+		}
+		if n >= 2 {
+			tr.SpanHours = last.Sub(first).Hours()
+		}
+		res.Trend[f.metric] = tr
+		if f.metric == "tan" {
+			latestTAN = latest
+		}
 	}
-	phV := 7.0
-	if ph != nil {
-		phV = *ph
-	} else if k.PHUsed != nil {
-		phV = *k.PHUsed
-	}
+
 	var nh3 *float64
-	if k.TANMGL != nil {
-		v := FreeAmmonia(*k.TANMGL, phV, tempC)
+	if latestTAN != nil {
+		tempC := 25.0
+		if temp != nil {
+			tempC = *temp
+		} else if latestTAN.TempUsed != nil {
+			tempC = *latestTAN.TempUsed
+		}
+		phV := 7.0
+		if ph != nil {
+			phV = *ph
+		} else if latestTAN.PHUsed != nil {
+			phV = *latestTAN.PHUsed
+		}
+		v := FreeAmmonia(*latestTAN.TANMGL, phV, tempC)
 		nh3 = roundPtr(&v, 3)
 		res.Current["nh3_free"] = nh3
 	}
-	nDO, nTAN := 0, 0
-	var firstDO, lastDO, firstTAN, lastTAN time.Time
-	for _, row := range kits {
-		if row.DOMGL != nil {
-			nDO++
-			if firstDO.IsZero() || row.MeasuredAt.Before(firstDO) {
-				firstDO = row.MeasuredAt
-			}
-			if lastDO.IsZero() || row.MeasuredAt.After(lastDO) {
-				lastDO = row.MeasuredAt
-			}
-		}
-		if row.TANMGL != nil {
-			nTAN++
-			if firstTAN.IsZero() || row.MeasuredAt.Before(firstTAN) {
-				firstTAN = row.MeasuredAt
-			}
-			if lastTAN.IsZero() || row.MeasuredAt.After(lastTAN) {
-				lastTAN = row.MeasuredAt
-			}
-		}
-	}
-	doTrend := MetricTrend{Current: res.Current["do"], Slope: "unknown", N: nDO}
-	if nDO >= 2 {
-		doTrend.SpanHours = lastDO.Sub(firstDO).Hours()
-	}
-	tanTrend := MetricTrend{Current: res.Current["tan"], Slope: "unknown", N: nTAN}
-	if nTAN >= 2 {
-		tanTrend.SpanHours = lastTAN.Sub(firstTAN).Hours()
-	}
-	res.Trend["do"] = doTrend
-	res.Trend["tan"] = tanTrend
-	res.Trend["nh3_free"] = MetricTrend{Current: nh3, Slope: "unknown", N: nTAN}
-	if !stale && (k.DOMGL != nil || k.TANMGL != nil) {
-		res.Limitations = "Oxy và amonia lấy từ test kit thủ công (không phải cảm biến ESP). NH₃ tự do ước lượng từ TAN + pH/nhiệt Emerson. Chưa có NO2/NO3/KH/GH."
+	res.Trend["nh3_free"] = MetricTrend{Current: nh3, Slope: "unknown", N: res.Trend["tan"].N}
+	if !stale {
+		res.Limitations = "Oxy, amonia, nitrite, nitrate, KH lấy từ test kit thủ công (không phải cảm biến ESP). NH₃ tự do ước lượng từ TAN + pH/nhiệt theo Emerson. Chưa đo CO₂."
 	}
 }
 

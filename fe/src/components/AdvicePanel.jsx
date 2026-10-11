@@ -12,10 +12,16 @@ const SPECIES = [
   { id: 'neon', label: 'Neon' },
 ];
 
+const SYSTEMS = [
+  { id: 'pond', label: 'Ao / bể thường' },
+  { id: 'ras', label: 'RAS tuần hoàn' },
+];
+
 const DEFAULT_PROFILE = {
   volume_m3: 9,
   species: 'ca_chinh',
   has_filter: false,
+  system_type: 'pond',
 };
 
 function loadProfile() {
@@ -33,7 +39,9 @@ function formatDelta(metric, delta) {
   const sign = delta > 0 ? '+' : '';
   if (metric === 'ph') return `${sign}${Number(delta).toFixed(2)}`;
   if (metric === 'tds') return `${sign}${Math.round(delta)} ppm`;
-  if (metric === 'do' || metric === 'tan') return `${sign}${Number(delta).toFixed(2)} mg/L`;
+  if (metric === 'do' || metric === 'tan' || metric === 'no2') return `${sign}${Number(delta).toFixed(2)} mg/L`;
+  if (metric === 'no3') return `${sign}${Math.round(delta)} mg/L`;
+  if (metric === 'kh') return `${sign}${Number(delta).toFixed(1)} dKH`;
   if (metric === 'nh3_free') return `${sign}${Number(delta).toFixed(3)} mg/L`;
   return `${sign}${Number(delta).toFixed(1)} °C`;
 }
@@ -57,11 +65,14 @@ const METRIC_NAME = {
   ph: 'pH',
   tds: 'TDS',
   do: 'Oxy (kit)',
-  tan: 'TAN (kit)',
+  tan: 'NH₄/NH₃ tổng (kit)',
   nh3_free: 'NH₃ tự do',
+  no2: 'Nitrite NO₂ (kit)',
+  no3: 'Nitrate NO₃ (kit)',
+  kh: 'KH (kit, dKH)',
 };
 
-export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfigChange }) {
+export default function AdvicePanel({ deviceId, pondConfig, onPondConfigChange }) {
   const [profile, setProfile] = useState(loadProfile);
   const [advice, setAdvice] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -75,6 +86,7 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
       volume_m3: pondConfig.volume_m3 ?? prev.volume_m3,
       species: pondConfig.species || prev.species,
       has_filter: !!pondConfig.has_filter,
+      system_type: pondConfig.system_type || prev.system_type,
     }));
   }, [pondConfig]);
 
@@ -106,12 +118,14 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
         volume_m3: Number.isFinite(m3) ? m3 : 9,
         species: profile.species || 'ca_chinh',
         has_filter: !!profile.has_filter,
+        system_type: profile.system_type || 'pond',
       });
       if (saved && onPondConfigChange) onPondConfigChange(saved);
       const data = await api.getAdvice(deviceId, {
         volume_l: (Number.isFinite(m3) ? m3 : 9) * 1000,
         species: profile.species || 'ca_chinh',
         has_filter: !!profile.has_filter,
+        system_type: profile.system_type || 'pond',
       });
       setAdvice(data);
     } catch (e) {
@@ -120,11 +134,6 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
     } finally {
       setLoading(false);
     }
-  };
-
-  const handlePump = async (target, state, level = 0) => {
-    if (!onPump) return;
-    await onPump(target, state, level);
   };
 
   return (
@@ -142,10 +151,26 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
       </div>
 
       <p className="advice-lead">
-        Phân tích cần OpenAI. Tự lấy pH/TDS/nhiệt độ từ ESP và Oxy/Amonia từ nhật ký test kit đã lưu.
+        Phân tích cần OpenAI. Tự lấy pH/TDS/nhiệt độ từ ESP và oxy, amonia, nitrite, nitrate, KH từ nhật ký test kit đã lưu.
       </p>
 
       <div className="advice-profile">
+        <label>
+          Kiểu hệ thống
+          <select
+            value={profile.system_type || 'pond'}
+            onChange={(e) => setProfile((p) => ({ ...p, system_type: e.target.value }))}
+          >
+            {SYSTEMS.map((s) => (
+              <option key={s.id} value={s.id}>{s.label}</option>
+            ))}
+          </select>
+          <span className="advice-field-hint">
+            {profile.system_type === 'ras'
+              ? 'RAS: pH tụt xử lý bằng châm kiềm / tách CO₂, thay nước nhỏ hằng ngày'
+              : 'Ao, bể cảnh: thay nước từng phần khi chỉ số xấu'}
+          </span>
+        </label>
         <label>
           Thể tích hồ (khối / m³)
           <input
@@ -196,11 +221,14 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
             {latestKit.do_mg_l != null ? ` · DO ${latestKit.do_mg_l} mg/L` : ''}
             {latestKit.tan_mg_l != null ? ` · TAN ${latestKit.tan_mg_l} mg/L` : ''}
             {latestKit.nh3_free_mg_l != null ? ` · NH₃ ~${Number(latestKit.nh3_free_mg_l).toFixed(3)} mg/L` : ''}
+            {latestKit.no2_mg_l != null ? ` · NO₂ ${latestKit.no2_mg_l} mg/L` : ''}
+            {latestKit.no3_mg_l != null ? ` · NO₃ ${latestKit.no3_mg_l} mg/L` : ''}
+            {latestKit.kh_dkh != null ? ` · KH ${latestKit.kh_dkh} dKH` : ''}
             {' '}— nhập thêm ở menu <b>Test Kit</b>.
           </p>
         ) : (
           <p className="advice-field-hint" style={{ margin: 0 }}>
-            Chưa có số Oxy/Amonia. Vào menu <b>Test Kit</b> để nhập và lưu lịch sử; lần phân tích sau sẽ tự lấy.
+            Chưa có số test kit. Vào menu <b>Test Kit</b> để nhập và lưu lịch sử; lần phân tích sau sẽ tự lấy.
           </p>
         )}
       </div>
@@ -248,8 +276,11 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
           </div>
 
           <div className="advice-trend-grid">
-            {['ph', 'tds', 'temperature', 'do', 'tan', 'nh3_free'].map((key) => {
+            {['ph', 'tds', 'temperature', 'do', 'tan', 'nh3_free', 'no2', 'no3', 'kh'].map((key) => {
               const tr = advice.trend?.[key] || {};
+              if (['no2', 'no3', 'kh'].includes(key) && tr.current == null && advice.profile?.system_type !== 'ras') {
+                return null;
+              }
               return (
                 <div key={key} className="advice-trend-item">
                   <div className="advice-trend-name">{METRIC_NAME[key]}</div>
@@ -291,19 +322,6 @@ export default function AdvicePanel({ deviceId, onPump, pondConfig, onPondConfig
               <li key={`${a.priority}-${a.type}`}>
                 <div className="advice-action-title">{a.title}</div>
                 <div className="advice-action-detail">{a.detail}</div>
-                {a.type === 'water_change_percent' && onPump && (
-                  <div className="advice-action-hw">
-                    <button className="btn btn-secondary" type="button" onClick={() => handlePump('drain', true)}>
-                      Mở van xả
-                    </button>
-                    <button className="btn btn-secondary" type="button" onClick={() => handlePump('inlet', true, 2)}>
-                      Mở van nạp
-                    </button>
-                    <span className="advice-action-hw-note">
-                      Tắt van thủ công khi đủ {a.amount_pct || 20}%. Không xả cạn hồ.
-                    </span>
-                  </div>
-                )}
               </li>
             ))}
           </ol>

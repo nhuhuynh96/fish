@@ -6,10 +6,13 @@ import (
 )
 
 type Profile struct {
-	VolumeL   float64 `json:"volume_l"`
-	Species   string  `json:"species"`
-	HasFilter *bool   `json:"has_filter,omitempty"`
+	VolumeL    float64 `json:"volume_l"`
+	Species    string  `json:"species"`
+	HasFilter  *bool   `json:"has_filter,omitempty"`
+	SystemType string  `json:"system_type"` // "pond" hoặc "ras"
 }
+
+func (p Profile) IsRAS() bool { return p.SystemType == "ras" }
 
 type Thresholds struct {
 	TempMin       float64 `json:"temp_min"`
@@ -25,6 +28,11 @@ type Thresholds struct {
 	TANMax        float64 `json:"tan_max"`
 	NH3FreeWarn   float64 `json:"nh3_free_warn"`
 	NH3FreeMax    float64 `json:"nh3_free_max"`
+	NO2Warn       float64 `json:"no2_warn"`
+	NO2Max        float64 `json:"no2_max"`
+	NO3Warn       float64 `json:"no3_warn"`
+	NO3Max        float64 `json:"no3_max"`
+	KHMin         float64 `json:"kh_min"` // dKH
 }
 
 type Snapshot struct {

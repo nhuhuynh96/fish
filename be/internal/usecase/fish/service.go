@@ -479,9 +479,13 @@ func (s *Service) GetAdvice(ctx context.Context, deviceID string, profile advice
 	}
 	cfg := s.loadPondConfig(ctx)
 	merged := advice.Profile{
-		VolumeL:   cfg.VolumeL,
-		Species:   cfg.Species,
-		HasFilter: &cfg.HasFilter,
+		VolumeL:    cfg.VolumeL,
+		Species:    cfg.Species,
+		HasFilter:  &cfg.HasFilter,
+		SystemType: cfg.SystemType,
+	}
+	if strings.TrimSpace(profile.SystemType) != "" {
+		merged.SystemType = fish.NormalizeSystemType(profile.SystemType)
 	}
 	if profile.VolumeL > 0 {
 		merged.VolumeL = profile.VolumeL
@@ -514,14 +518,24 @@ func (s *Service) SaveKitReading(ctx context.Context, r *fish.KitReading) (*fish
 	if r == nil || strings.TrimSpace(r.DeviceID) == "" {
 		return nil, fmt.Errorf("missing device id")
 	}
-	if r.DOMGL == nil && r.TANMGL == nil {
-		return nil, fmt.Errorf("cần ít nhất oxy (do_mg_l) hoặc amonia (tan_mg_l)")
+	if !r.HasAny() {
+		return nil, fmt.Errorf("cần ít nhất một chỉ số: oxy, amonia, nitrite, nitrate hoặc KH")
 	}
-	if r.DOMGL != nil && (*r.DOMGL < 0 || *r.DOMGL > 20) {
-		return nil, fmt.Errorf("do_mg_l phải từ 0–20")
+	checks := []struct {
+		v    *float64
+		name string
+		max  float64
+	}{
+		{r.DOMGL, "do_mg_l", 20},
+		{r.TANMGL, "tan_mg_l", 20},
+		{r.NO2MGL, "no2_mg_l", 20},
+		{r.NO3MGL, "no3_mg_l", 500},
+		{r.KHDKH, "kh_dkh", 30},
 	}
-	if r.TANMGL != nil && (*r.TANMGL < 0 || *r.TANMGL > 20) {
-		return nil, fmt.Errorf("tan_mg_l phải từ 0–20")
+	for _, c := range checks {
+		if c.v != nil && (*c.v < 0 || *c.v > c.max) {
+			return nil, fmt.Errorf("%s phải từ 0–%g", c.name, c.max)
+		}
 	}
 	if latest, err := s.repo.GetLatestMeasurement(ctx, r.DeviceID); err == nil && latest != nil {
 		r.PHUsed = latest.PH
@@ -590,6 +604,9 @@ func (s *Service) UpdatePondConfig(ctx context.Context, patch *fish.PondConfig) 
 		cur.VolumeL = patch.VolumeM3 * 1000
 	}
 	cur.HasFilter = patch.HasFilter
+	if strings.TrimSpace(patch.SystemType) != "" {
+		cur.SystemType = fish.NormalizeSystemType(patch.SystemType)
+	}
 	if speciesChanged && patch.Thresholds == (fish.WaterThresholds{}) {
 		cur.Thresholds = fromAdviceThresholds(advice.ThresholdsFor(cur.Species))
 	}

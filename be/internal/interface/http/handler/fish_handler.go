@@ -390,16 +390,18 @@ func (h *FishHandler) GetAdvice(c *gin.Context) {
 	}
 
 	var req struct {
-		VolumeL   float64 `json:"volume_l"`
-		Species   string  `json:"species"`
-		HasFilter *bool   `json:"has_filter"`
+		VolumeL    float64 `json:"volume_l"`
+		Species    string  `json:"species"`
+		HasFilter  *bool   `json:"has_filter"`
+		SystemType string  `json:"system_type"`
 	}
 	_ = c.ShouldBindJSON(&req)
 
 	res, err := h.svc.GetAdvice(c.Request.Context(), deviceID, advice.Profile{
-		VolumeL:   req.VolumeL,
-		Species:   req.Species,
-		HasFilter: req.HasFilter,
+		VolumeL:    req.VolumeL,
+		Species:    req.Species,
+		HasFilter:  req.HasFilter,
+		SystemType: req.SystemType,
 	})
 	if err != nil {
 		if errors.Is(err, advice.ErrLLMNotConfigured) || errors.Is(err, advice.ErrLLMUnavailable) {
@@ -421,6 +423,9 @@ func (h *FishHandler) SaveKitReading(c *gin.Context) {
 	var req struct {
 		DOMGL      *float64 `json:"do_mg_l"`
 		TANMGL     *float64 `json:"tan_mg_l"`
+		NO2MGL     *float64 `json:"no2_mg_l"`
+		NO3MGL     *float64 `json:"no3_mg_l"`
+		KHDKH      *float64 `json:"kh_dkh"`
 		MeasuredAt string   `json:"measured_at"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -431,6 +436,9 @@ func (h *FishHandler) SaveKitReading(c *gin.Context) {
 		DeviceID: deviceID,
 		DOMGL:    req.DOMGL,
 		TANMGL:   req.TANMGL,
+		NO2MGL:   req.NO2MGL,
+		NO3MGL:   req.NO3MGL,
+		KHDKH:    req.KHDKH,
 	}
 	if ts := strings.TrimSpace(req.MeasuredAt); ts != "" {
 		t, err := time.Parse(time.RFC3339, ts)

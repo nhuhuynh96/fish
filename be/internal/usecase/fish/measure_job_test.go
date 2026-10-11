@@ -67,6 +67,9 @@ func (w *scriptWater) PublishAutoToggle(context.Context, string, bool) error { r
 
 func runScript(t *testing.T, start int, sensors []string, want []string) *scriptWater {
 	t.Helper()
+	prev := waterSettleDelay
+	waterSettleDelay = 0
+	t.Cleanup(func() { waterSettleDelay = prev })
 	store := memory.NewStore()
 	water := &scriptWater{level: start}
 	svc := NewService(store, store, store, store, water, nil)

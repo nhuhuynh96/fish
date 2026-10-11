@@ -6,8 +6,22 @@ function fmt(v, digits) {
   return Number(v).toFixed(digits);
 }
 
+const EMPTY_FORM = { do_mg_l: '', tan_mg_l: '', no2_mg_l: '', no3_mg_l: '', kh_dkh: '', measured_at: '' };
+
+const FIELDS = [
+  { key: 'do_mg_l', label: 'Oxy hòa tan DO (mg/L)', max: 20, step: 0.1, placeholder: 'vd. 6.5' },
+  { key: 'tan_mg_l', label: 'Amonia tổng NH₄/NH₃ (mg/L)', max: 20, step: 0.01, placeholder: 'vd. 0.25' },
+  { key: 'no2_mg_l', label: 'Nitrite NO₂ (mg/L)', max: 20, step: 0.01, placeholder: 'vd. 0.1' },
+  { key: 'no3_mg_l', label: 'Nitrate NO₃ (mg/L)', max: 500, step: 1, placeholder: 'vd. 40' },
+  { key: 'kh_dkh', label: 'Độ kiềm KH (dKH)', max: 30, step: 0.5, placeholder: 'vd. 7' },
+];
+
+function hasValue(v) {
+  return v !== '' && v != null && !Number.isNaN(Number(v));
+}
+
 export default function KitLogPanel({ deviceId }) {
-  const [form, setForm] = useState({ do_mg_l: '', tan_mg_l: '', measured_at: '' });
+  const [form, setForm] = useState(EMPTY_FORM);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -27,7 +41,7 @@ export default function KitLogPanel({ deviceId }) {
   }, [deviceId]);
 
   useEffect(() => {
-    setForm({ do_mg_l: '', tan_mg_l: '', measured_at: '' });
+    setForm(EMPTY_FORM);
     setMessage('');
     load();
   }, [deviceId, load]);
@@ -35,10 +49,8 @@ export default function KitLogPanel({ deviceId }) {
   const handleSave = async (e) => {
     e.preventDefault();
     if (!deviceId) return;
-    const doVal = form.do_mg_l === '' ? null : Number(form.do_mg_l);
-    const tanVal = form.tan_mg_l === '' ? null : Number(form.tan_mg_l);
-    if ((doVal == null || Number.isNaN(doVal)) && (tanVal == null || Number.isNaN(tanVal))) {
-      setMessage('Nhập ít nhất Oxy hoặc Amonia.');
+    if (!FIELDS.some((f) => hasValue(form[f.key]))) {
+      setMessage('Nhập ít nhất một chỉ số.');
       return;
     }
     setSaving(true);
@@ -48,12 +60,8 @@ export default function KitLogPanel({ deviceId }) {
       if (form.measured_at) {
         measured_at = new Date(form.measured_at).toISOString();
       }
-      await api.saveKitReading(deviceId, {
-        do_mg_l: doVal == null || Number.isNaN(doVal) ? null : doVal,
-        tan_mg_l: tanVal == null || Number.isNaN(tanVal) ? null : tanVal,
-        measured_at,
-      });
-      setForm({ do_mg_l: '', tan_mg_l: '', measured_at: '' });
+      await api.saveKitReading(deviceId, { ...form, measured_at });
+      setForm(EMPTY_FORM);
       setMessage('Đã lưu. Phân tích xu hướng trên Dashboard sẽ tự lấy mẫu kit này.');
       await load();
     } catch (err) {
@@ -69,39 +77,31 @@ export default function KitLogPanel({ deviceId }) {
         <svg width="18" height="18" fill="var(--accent)" viewBox="0 0 24 24">
           <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10H7v-2h10v2zm0-4H7V7h10v2z" />
         </svg>
-        Nhật ký test kit (Oxy / Amonia)
+        Nhật ký test kit
       </div>
 
       <p className="advice-lead">
-        Số từ que kit, không phải cảm biến ESP. Que thường in <b>TAN (NH₃+NH₄) mg/L</b>.
-        NH₃ tự do được ước lượng từ TAN + pH ESP. Phân tích xu hướng tự lấy mẫu mới nhất (&lt; 24 giờ).
+        Số từ que kit, không phải cảm biến ESP. Bộ test NH₄/NH₃ cho ra <b>amonia tổng (NH₄ + NH₃, còn gọi là TAN)</b>:
+        nhập số đọc trên bảng màu, không nhập số NH₃ tra từ bảng pH của kit. NH₃ tự do được app tự tính từ amonia tổng + pH và nhiệt độ ESP.
+        Chỉ cần nhập chỉ số có kit, ô khác để trống.
+        Hồ RAS nên đo nitrite và KH vài ngày một lần.
       </p>
 
       <form className="advice-profile" onSubmit={handleSave}>
-        <label>
-          Oxy hòa tan DO (mg/L)
-          <input
-            type="number"
-            min="0"
-            max="20"
-            step="0.1"
-            placeholder="vd. 6.5"
-            value={form.do_mg_l}
-            onChange={(e) => setForm((f) => ({ ...f, do_mg_l: e.target.value }))}
-          />
-        </label>
-        <label>
-          Amonia TAN (mg/L)
-          <input
-            type="number"
-            min="0"
-            max="20"
-            step="0.01"
-            placeholder="vd. 0.25"
-            value={form.tan_mg_l}
-            onChange={(e) => setForm((f) => ({ ...f, tan_mg_l: e.target.value }))}
-          />
-        </label>
+        {FIELDS.map((f) => (
+          <label key={f.key}>
+            {f.label}
+            <input
+              type="number"
+              min="0"
+              max={f.max}
+              step={f.step}
+              placeholder={f.placeholder}
+              value={form[f.key]}
+              onChange={(e) => setForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+            />
+          </label>
+        ))}
         <label>
           Thời điểm đo
           <input
@@ -124,8 +124,11 @@ export default function KitLogPanel({ deviceId }) {
             <tr>
               <th>Thời điểm đo</th>
               <th>DO (mg/L)</th>
-              <th>TAN (mg/L)</th>
+              <th>NH₄/NH₃ tổng (mg/L)</th>
               <th>NH₃ tự do (mg/L)</th>
+              <th>NO₂ (mg/L)</th>
+              <th>NO₃ (mg/L)</th>
+              <th>KH (dKH)</th>
               <th>pH lúc tính</th>
               <th>Nguồn</th>
             </tr>
@@ -133,7 +136,7 @@ export default function KitLogPanel({ deviceId }) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="6" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '24px' }}>
+                <td colSpan="9" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '24px' }}>
                   Đang tải…
                 </td>
               </tr>
@@ -146,6 +149,9 @@ export default function KitLogPanel({ deviceId }) {
                   <td style={{ color: '#38bdf8', fontWeight: 600 }}>{fmt(r.do_mg_l, 1)}</td>
                   <td style={{ color: '#fbbf24', fontWeight: 600 }}>{fmt(r.tan_mg_l, 2)}</td>
                   <td style={{ color: '#f87171', fontWeight: 600 }}>{fmt(r.nh3_free_mg_l, 3)}</td>
+                  <td style={{ color: '#fb923c', fontWeight: 600 }}>{fmt(r.no2_mg_l, 2)}</td>
+                  <td style={{ color: '#a78bfa', fontWeight: 600 }}>{fmt(r.no3_mg_l, 0)}</td>
+                  <td style={{ color: '#34d399', fontWeight: 600 }}>{fmt(r.kh_dkh, 1)}</td>
                   <td>{fmt(r.ph_used, 2)}</td>
                   <td>
                     <span
@@ -164,8 +170,8 @@ export default function KitLogPanel({ deviceId }) {
               ))
             ) : (
               <tr>
-                <td colSpan="6" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '30px' }}>
-                  Chưa có mẫu kit. Nhập DO / TAN rồi lưu.
+                <td colSpan="9" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '30px' }}>
+                  Chưa có mẫu kit. Nhập chỉ số rồi lưu.
                 </td>
               </tr>
             )}
