@@ -87,7 +87,7 @@ func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, senso
 	s.jobRunning = true
 	s.jobPond = deviceID
 	s.jobMu.Unlock()
-	log.Printf("[Usecase] Bắt đầu đo tự động [%s]: chỉnh mực từng sensor, đo, rồi xả 60s: %v", deviceID, sensors)
+	log.Printf("[Usecase] Bắt đầu đo tự động [%s]: chỉnh mực từng sensor, đo, rồi xả %ds: %v", deviceID, finalDrainDurationS, sensors)
 	go s.runMeasure(deviceID, sensors)
 	return nil
 }

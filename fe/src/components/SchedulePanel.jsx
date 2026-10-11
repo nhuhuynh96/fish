@@ -116,7 +116,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
       </div>
 
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Auto: nhiệt độ và pH ở phao 1 (thiếu thì bơm, dư thì xả tới khi phao 2 tắt), TDS ở phao 2 (thiếu thì bơm), đo xong xả 60 giây.
+        Auto: pH rồi nhiệt độ ở phao 1 (thiếu thì bơm, dư thì xả tới khi phao 2 tắt), TDS ở phao 2 (thiếu thì bơm), đo xong xả 90 giây.
       </p>
 
       <div style={{ marginBottom: '16px' }}>

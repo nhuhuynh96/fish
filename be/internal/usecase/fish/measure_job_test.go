@@ -85,10 +85,10 @@ func runScript(t *testing.T, start int, sensors []string, want []string) *script
 
 func TestRunMeasure_FullBinDrainsToLevel1ThenFillsForTDS(t *testing.T) {
 	water := runScript(t, 2, []string{"tds", "ph", "temp"}, []string{
-		"level", "drain:2", "level", "measure:temp",
-		"level", "measure:ph",
+		"level", "drain:2", "level", "measure:ph",
+		"level", "measure:temp",
 		"level", "inlet:2", "measure:tds",
-		"drain:0:60",
+		"drain:0:90",
 	})
 	if water.level != 0 {
 		t.Fatalf("bình phải trống sau khi xả, level=%d", water.level)
@@ -96,11 +96,18 @@ func TestRunMeasure_FullBinDrainsToLevel1ThenFillsForTDS(t *testing.T) {
 }
 
 func TestRunMeasure_EmptyBinTDS(t *testing.T) {
-	runScript(t, 0, []string{"tds"}, []string{"level", "inlet:2", "measure:tds", "drain:0:60"})
+	runScript(t, 0, []string{"tds"}, []string{"level", "inlet:2", "measure:tds", "drain:0:90"})
 }
 
 func TestRunMeasure_EmptyBinTemp(t *testing.T) {
-	runScript(t, 0, []string{"temp"}, []string{"level", "inlet:1", "measure:temp", "drain:0:60"})
+	runScript(t, 0, []string{"temp"}, []string{"level", "inlet:1", "measure:temp", "drain:0:90"})
+}
+
+func TestNormalizeSensors_PHBeforeTemp(t *testing.T) {
+	got := strings.Join(normalizeSensors([]string{"temp", "tds", "ph"}), ",")
+	if got != "ph,temp,tds" {
+		t.Fatalf("thứ tự sai: %s", got)
+	}
 }
 
 func TestSensorFillLevel(t *testing.T) {

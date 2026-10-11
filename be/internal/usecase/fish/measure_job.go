@@ -19,7 +19,7 @@ const (
 	sensorWaitLimit       = 60 * time.Second
 	fillDurationS         = 180
 	drainToLevelDurationS = 120
-	finalDrainDurationS   = 60
+	finalDrainDurationS   = 90
 )
 
 // Đo pH ngay sau khi bơm cho kết quả cao hơn khoảng 0,5 do nước chưa ổn định.
@@ -345,7 +345,8 @@ func sensorLabel(action string) string {
 	}
 }
 
-// Thứ tự cố định temp, pH, TDS: nhóm phao 1 đo trước, TDS phao 2 đo sau.
+// Thứ tự cố định pH, temp, TDS: nhóm phao 1 đo trước, TDS phao 2 đo sau.
+// pH phải đo trước nhiệt độ: đo ngay sau DS18B20 làm pH cao hơn khoảng 0,5.
 func normalizeSensors(sensors []string) []string {
 	seen := map[string]bool{}
 	add := func(name string) { seen[name] = true }
@@ -364,7 +365,7 @@ func normalizeSensors(sensors []string) []string {
 		}
 	}
 	var out []string
-	for _, name := range []string{"temp", "ph", "tds"} {
+	for _, name := range []string{"ph", "temp", "tds"} {
 		if seen[name] {
 			out = append(out, name)
 		}
