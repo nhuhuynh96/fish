@@ -92,19 +92,32 @@ func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, senso
 	return nil
 }
 
-// 1b. Đo ngay từ dashboard: gửi thẳng lệnh tới sensor, không bơm hay xả.
+func (s *Service) JobRunning() bool {
+	s.jobMu.Lock()
+	defer s.jobMu.Unlock()
+	return s.jobRunning
+}
+
+// 1b. Đo ngay từ dashboard: backend bật nguồn, chờ, đọc, tắt từng sensor; không bơm hay xả.
 func (s *Service) MeasureNow(ctx context.Context, sensors []string) error {
+	_ = ctx
 	if len(sensors) == 0 {
 		sensors = []string{"all"}
 	}
-	s.jobMu.Lock()
-	running := s.jobRunning
-	s.jobMu.Unlock()
-	if running {
-		return fmt.Errorf("đang chạy lịch đo tự động")
+	if len(normalizeSensors(sensors)) == 0 {
+		return fmt.Errorf("không có chỉ số đo được hỗ trợ: %v", sensors)
 	}
-	log.Printf("[Usecase] Đo ngay, gửi sensor: %v", sensors)
-	return s.pub.PublishMeasure(ctx, sensorDeviceID, sensors)
+	s.jobMu.Lock()
+	if s.jobRunning {
+		s.jobMu.Unlock()
+		return fmt.Errorf("đang có lượt đo, chờ xong rồi bấm lại")
+	}
+	s.jobRunning = true
+	s.jobPond = sensorDeviceID
+	s.jobMu.Unlock()
+	log.Printf("[Usecase] Đo ngay: %v", sensors)
+	go s.runManualMeasure(sensors)
+	return nil
 }
 
 // 2. Điều khiển bơm nạp / xả thủ công. level 0 = chạy theo thời gian, duration 0 = mặc định của firmware.
@@ -131,21 +144,6 @@ func (s *Service) ClearQueue(ctx context.Context, deviceID string) error {
 	_ = deviceID
 	log.Printf("[Usecase] Xóa hàng đợi trên water")
 	return s.pub.PublishClearQueue(ctx, waterDeviceID)
-}
-
-// 2b. Lịch đo nằm ở backend scheduler. Firmware sensor không nhận action schedule.
-func (s *Service) SetSchedule(ctx context.Context, deviceID string, enabled bool, temp, ph, turb, tds int) error {
-	_ = ctx
-	log.Printf("[Usecase] Lịch đo [%s] do backend giữ, lệnh đo sẽ gửi sensor: auto=%v, temp=%ds, ph=%ds, turb=%ds, tds=%ds",
-		deviceID, enabled, temp, ph, turb, tds)
-	return nil
-}
-
-// 2c. Bật/tắt chế độ tự động đo trên backend scheduler.
-func (s *Service) ToggleAuto(ctx context.Context, deviceID string, enabled bool) error {
-	_ = ctx
-	log.Printf("[Usecase] Auto [%s] -> %v, lệnh đo gửi sensor", deviceID, enabled)
-	return nil
 }
 
 type rawReading struct {
@@ -183,7 +181,7 @@ func (s *Service) HandleSensorData(ctx context.Context, deviceID string, payload
 	if body.DeviceID == "" {
 		body.DeviceID = deviceID
 	}
-	s.noteSensor(deviceID, body.DeviceID, body.Sensors, false, "")
+	s.noteSensor(deviceID, body.DeviceID, sensorSig{Stage: "data", Names: body.Sensors})
 
 	m := &fish.Measurement{
 		ID:         uuid.New().String(),
@@ -293,11 +291,16 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 		DrainOn    *bool  `json:"drain_on"`
 		FloatFull  *bool  `json:"float_full"`
 		FloatEmpty *bool  `json:"float_empty"`
+		Sensor     string `json:"sensor"`
+		// bool ở sự kiện "power", object ở "power_status".
+		Power json.RawMessage `json:"power"`
 	}
 
 	if err := json.Unmarshal(payload, &body); err != nil {
 		return fmt.Errorf("unmarshal event: %w", err)
 	}
+	var powerOn bool
+	_ = json.Unmarshal(body.Power, &powerOn)
 
 	if body.DeviceID == "" {
 		body.DeviceID = deviceID
@@ -328,6 +331,7 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 		s.hub.Broadcast("sampling_event", e)
 	}
 	s.noteWater(deviceID, body.DeviceID, body.Stage, body.Level, body.Message)
+	s.noteSensorEvent(deviceID, body.DeviceID, body.Stage, body.Sensor, powerOn, body.Message)
 
 	return nil
 }

@@ -67,7 +67,8 @@ type DeviceRepository interface {
 }
 
 type CommandPublisher interface {
-	PublishMeasure(ctx context.Context, deviceID string, sensors []string) error
+	PublishSensorPower(ctx context.Context, deviceID string, sensor string, on bool, maxOnS int) error
+	PublishRead(ctx context.Context, deviceID string, sensor string, samples, intervalMs int) error
 	PublishLevel(ctx context.Context, deviceID string) error
 	PublishPump(ctx context.Context, deviceID string, target string, state bool, level, duration int) error
 	PublishClearQueue(ctx context.Context, deviceID string) error

@@ -1,11 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 
+// -1 không đo, 0 đo liên tục, > 0 số giây giữa hai lần đo.
+function describeInterval(value) {
+  const v = Number(value);
+  if (Number.isNaN(v) || value === '') return '';
+  if (v < 0) return 'Không đo';
+  if (v === 0) return 'Đo liên tục';
+  if (v < 60) return `Mỗi ${v} giây`;
+  return `≈ ${Math.round((v / 60) * 10) / 10} phút`;
+}
+
+const asInterval = (value) => {
+  const v = Math.trunc(Number(value));
+  if (Number.isNaN(v)) return -1;
+  return v < 0 ? -1 : v;
+};
+
 export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto }) {
   const [autoEnabled, setAutoEnabled] = useState(false);
-  const [tempInterval, setTempInterval] = useState(60);
-  const [phInterval, setPhInterval] = useState(120);
-  const [tdsInterval, setTdsInterval] = useState(300);
+  const [tempInterval, setTempInterval] = useState(1800);
+  const [phInterval, setPhInterval] = useState(1800);
+  const [tdsInterval, setTdsInterval] = useState(3600);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -19,9 +35,9 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
         const sched = await api.getSchedule(deviceId);
         if (!active || !sched) return;
         setAutoEnabled(!!sched.auto_enabled);
-        if (sched.temp_interval > 0) setTempInterval(sched.temp_interval);
-        if (sched.ph_interval > 0) setPhInterval(sched.ph_interval);
-        if (sched.tds_interval > 0) setTdsInterval(sched.tds_interval);
+        if (typeof sched.temp_interval === 'number') setTempInterval(sched.temp_interval);
+        if (typeof sched.ph_interval === 'number') setPhInterval(sched.ph_interval);
+        if (typeof sched.tds_interval === 'number') setTdsInterval(sched.tds_interval);
       } catch (e) {
         console.error('Load schedule error:', e);
       } finally {
@@ -45,10 +61,10 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
     try {
       await onSetSchedule({
         autoEnabled,
-        tempInterval: Number(tempInterval),
-        phInterval: Number(phInterval),
-        turbInterval: 0,
-        tdsInterval: Number(tdsInterval),
+        tempInterval: asInterval(tempInterval),
+        phInterval: asInterval(phInterval),
+        turbInterval: -1,
+        tdsInterval: asInterval(tdsInterval),
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -118,6 +134,10 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
         Auto: pH rồi nhiệt độ ở phao 1 (thiếu thì bơm, dư thì xả tới khi phao 2 tắt), TDS ở phao 2 (thiếu thì bơm), đo xong xả 90 giây.
       </p>
+      <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
+        Khoảng đo lưu trong database: <b>-1</b> không đo, <b>0</b> đo liên tục (xong lượt này chạy lượt kế, bơm và xả liên tục),
+        số dương là số giây giữa hai lần đo.
+      </p>
 
       <div style={{ marginBottom: '16px' }}>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>Cấu hình mẫu:</div>
@@ -126,25 +146,25 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(60, 120, 300)}
+            onClick={() => applyPreset(1800, 1800, 3600)}
           >
-            ⏱️ Tiêu chuẩn (1p - 2p - 5p)
+            ⏱️ Tiêu chuẩn (30p - 30p - 60p)
           </button>
           <button
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(15, 30, 60)}
+            onClick={() => applyPreset(-1, 0, -1)}
           >
-            ⚡ Test Nhanh (15s - 30s - 60s)
+            ⚡ Chỉ pH liên tục
           </button>
           <button
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(300, 600, 1800)}
+            onClick={() => applyPreset(3600, 3600, 7200)}
           >
-            🔋 Tiết kiệm (5p - 10p - 30p)
+            🔋 Tiết kiệm (1h - 1h - 2h)
           </button>
         </div>
       </div>
@@ -164,8 +184,8 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             </label>
             <input
               type="number"
-              min="5"
-              step="5"
+              min="-1"
+              step="1"
               value={tempInterval}
               onChange={(e) => setTempInterval(e.target.value)}
               className="form-input"
@@ -179,7 +199,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
                 fontSize: '13px',
               }}
             />
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>≈ {Math.round(tempInterval / 60 * 10) / 10} phút</span>
+            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{describeInterval(tempInterval)}</span>
           </div>
 
           <div className="form-group" style={{ margin: 0 }}>
@@ -188,8 +208,8 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             </label>
             <input
               type="number"
-              min="5"
-              step="5"
+              min="-1"
+              step="1"
               value={phInterval}
               onChange={(e) => setPhInterval(e.target.value)}
               className="form-input"
@@ -203,7 +223,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
                 fontSize: '13px',
               }}
             />
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>≈ {Math.round(phInterval / 60 * 10) / 10} phút</span>
+            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{describeInterval(phInterval)}</span>
           </div>
 
           <div className="form-group" style={{ margin: 0 }}>
@@ -212,8 +232,8 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             </label>
             <input
               type="number"
-              min="5"
-              step="5"
+              min="-1"
+              step="1"
               value={tdsInterval}
               onChange={(e) => setTdsInterval(e.target.value)}
               className="form-input"
@@ -227,7 +247,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
                 fontSize: '13px',
               }}
             />
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>≈ {Math.round(tdsInterval / 60 * 10) / 10} phút</span>
+            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{describeInterval(tdsInterval)}</span>
           </div>
         </div>
 

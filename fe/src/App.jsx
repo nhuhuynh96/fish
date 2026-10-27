@@ -155,9 +155,9 @@ export default function App() {
         } else if (type === 'sampling_event') {
           if (isBoard(payload.device_id)) {
             setEvents((prev) => [payload, ...prev.slice(0, 29)]);
-            const jobStages = ['fill', 'drain_level', 'settle', 'measure', 'final_drain'];
+            const jobStages = ['fill', 'drain_level', 'settle', 'warmup', 'measure', 'final_drain'];
             if (payload.stage === 'fill' || payload.stage === 'drain_level' || payload.stage === 'settle') setPhase(0);
-            else if (payload.stage === 'measure') setPhase(1);
+            else if (payload.stage === 'warmup' || payload.stage === 'measure') setPhase(1);
             else if (payload.stage === 'final_drain') setPhase(2);
             else if (payload.stage === 'job_done' || payload.stage === 'job_failed') {
               setPhase(-1);

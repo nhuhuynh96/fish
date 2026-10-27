@@ -10,9 +10,10 @@ import (
 )
 
 type scriptWater struct {
-	svc   *Service
-	level int
-	cmds  []string
+	svc         *Service
+	level       int
+	cmds        []string
+	rejectPower string
 }
 
 func (w *scriptWater) note(stage string, level int) {
@@ -48,14 +49,27 @@ func (w *scriptWater) PublishPump(_ context.Context, _ string, target string, st
 	return nil
 }
 
-func (w *scriptWater) PublishMeasure(_ context.Context, _ string, sensors []string) error {
-	action := sensors[0]
-	w.cmds = append(w.cmds, "measure:"+action)
-	name := action
+func (w *scriptWater) PublishSensorPower(_ context.Context, _ string, sensor string, on bool, _ int) error {
+	state := "off"
+	if on {
+		state = "on"
+	}
+	w.cmds = append(w.cmds, "power:"+sensor+":"+state)
+	if on && sensor == w.rejectPower {
+		w.svc.noteSensorEvent(sensorDeviceID, sensorDeviceID, "command_error", "", false, "TDS đang bật")
+		return nil
+	}
+	w.svc.noteSensorEvent(sensorDeviceID, sensorDeviceID, "power", sensor, on, "")
+	return nil
+}
+
+func (w *scriptWater) PublishRead(_ context.Context, _ string, sensor string, _, _ int) error {
+	w.cmds = append(w.cmds, "measure:"+sensor)
+	name := sensor
 	if name == "temp" {
 		name = "temperature"
 	}
-	w.svc.noteSensor(sensorDeviceID, sensorDeviceID, []string{name}, false, "")
+	w.svc.noteSensor(sensorDeviceID, sensorDeviceID, sensorSig{Stage: "data", Names: []string{name}})
 	return nil
 }
 
@@ -65,29 +79,43 @@ func (w *scriptWater) PublishSchedule(context.Context, string, bool, int, int, i
 }
 func (w *scriptWater) PublishAutoToggle(context.Context, string, bool) error { return nil }
 
-func runScript(t *testing.T, start int, sensors []string, want []string) *scriptWater {
+func newScript(t *testing.T, start int) *scriptWater {
 	t.Helper()
-	prev := waterSettleDelay
+	prevSettle := waterSettleDelay
+	prevTimings := sensorTimings
 	waterSettleDelay = 0
-	t.Cleanup(func() { waterSettleDelay = prev })
+	sensorTimings = map[string]sensorTiming{}
+	t.Cleanup(func() {
+		waterSettleDelay = prevSettle
+		sensorTimings = prevTimings
+	})
 	store := memory.NewStore()
 	water := &scriptWater{level: start}
-	svc := NewService(store, store, store, store, water, nil)
-	water.svc = svc
+	water.svc = NewService(store, store, store, store, water, nil)
+	return water
+}
 
-	svc.runMeasure("pond", sensors)
-
-	if strings.Join(water.cmds, ",") != strings.Join(want, ",") {
-		t.Fatalf("lệnh không đúng\n got %v\nwant %v", water.cmds, want)
+func checkCmds(t *testing.T, got, want []string) {
+	t.Helper()
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("lệnh không đúng\n got %v\nwant %v", got, want)
 	}
+}
+
+func runScript(t *testing.T, start int, sensors []string, want []string) *scriptWater {
+	t.Helper()
+	water := newScript(t, start)
+	water.svc.runMeasure("pond", sensors)
+	checkCmds(t, water.cmds, want)
 	return water
 }
 
 func TestRunMeasure_FullBinDrainsToLevel1ThenFillsForTDS(t *testing.T) {
 	water := runScript(t, 2, []string{"tds", "ph", "temp"}, []string{
-		"level", "drain:2", "level", "measure:ph",
-		"level", "measure:temp",
-		"level", "inlet:2", "measure:tds",
+		"power:all:off",
+		"level", "drain:2", "level", "power:ph:on", "measure:ph", "power:ph:off",
+		"level", "power:temp:on", "measure:temp", "power:temp:off",
+		"level", "inlet:2", "power:tds:on", "measure:tds", "power:tds:off",
 		"drain:0:90",
 	})
 	if water.level != 0 {
@@ -96,11 +124,35 @@ func TestRunMeasure_FullBinDrainsToLevel1ThenFillsForTDS(t *testing.T) {
 }
 
 func TestRunMeasure_EmptyBinTDS(t *testing.T) {
-	runScript(t, 0, []string{"tds"}, []string{"level", "inlet:2", "measure:tds", "drain:0:90"})
+	runScript(t, 0, []string{"tds"}, []string{
+		"power:all:off", "level", "inlet:2", "power:tds:on", "measure:tds", "power:tds:off", "drain:0:90",
+	})
 }
 
 func TestRunMeasure_EmptyBinTemp(t *testing.T) {
-	runScript(t, 0, []string{"temp"}, []string{"level", "inlet:1", "measure:temp", "drain:0:90"})
+	runScript(t, 0, []string{"temp"}, []string{
+		"power:all:off", "level", "inlet:1", "power:temp:on", "measure:temp", "power:temp:off", "drain:0:90",
+	})
+}
+
+func TestRunMeasure_PowerRejectedSkipsReadButStillDrains(t *testing.T) {
+	water := newScript(t, 1)
+	water.rejectPower = "ph"
+	water.svc.runMeasure("pond", []string{"ph", "tds"})
+	checkCmds(t, water.cmds, []string{
+		"power:all:off", "level", "power:ph:on", "power:ph:off", "drain:0:90",
+	})
+}
+
+func TestRunManualMeasure_NoWaterCommands(t *testing.T) {
+	water := newScript(t, 0)
+	water.svc.runManualMeasure([]string{"all"})
+	checkCmds(t, water.cmds, []string{
+		"power:all:off",
+		"power:ph:on", "measure:ph", "power:ph:off",
+		"power:temp:on", "measure:temp", "power:temp:off",
+		"power:tds:on", "measure:tds", "power:tds:off",
+	})
 }
 
 func TestNormalizeSensors_PHBeforeTemp(t *testing.T) {

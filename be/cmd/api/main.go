@@ -35,6 +35,7 @@ func main() {
 	var eventRepo fish.EventRepository
 	var devRepo fish.DeviceRepository
 	var calRepo fish.CalibrationRepository
+	var schedRepo fish.ScheduleRepository
 
 	if cfg.DBDSN != "" {
 		log.Println("[Storage] Đang kết nối PostgreSQL:", cfg.DBDSN)
@@ -49,6 +50,7 @@ func main() {
 		eventRepo = pgStore
 		devRepo = pgStore
 		calRepo = pgStore
+		schedRepo = pgStore
 	} else {
 		log.Println("[Storage] Sử dụng In-Memory Store (Chưa cấu hình DB_DSN)")
 		memStore := memory.NewStore()
@@ -56,6 +58,7 @@ func main() {
 		eventRepo = memStore
 		devRepo = memStore
 		calRepo = memStore
+		schedRepo = memStore
 	}
 
 	// 2. Khởi tạo WebSocket Realtime Hub
@@ -81,11 +84,14 @@ func main() {
 		log.Println("[Advice] LLM tắt — chỉ dùng rule + xu hướng (thiếu OPENAI_API_KEY)")
 	}
 
-	sched := scheduler.NewScheduler(fishSvc)
+	sched := scheduler.NewScheduler(fishSvc, schedRepo)
+	if err := sched.Load(context.Background()); err != nil {
+		log.Printf("[Scheduler] Không nạp được lịch đo đã lưu: %v", err)
+	}
 	sched.Start()
 	defer sched.Stop()
 
-	// Đăng ký lịch mặc định (Auto TẮT) cho mọi device đã có trong DB — không hardcode ID
+	// Device chưa có lịch trong DB thì dùng lịch mặc định (Auto TẮT), chỉ ghi DB khi người dùng lưu
 	if devices, err := fishSvc.ListDevices(context.Background()); err != nil {
 		log.Printf("[Scheduler] Không load được danh sách device: %v", err)
 	} else {

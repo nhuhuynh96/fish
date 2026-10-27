@@ -149,6 +149,15 @@ func initSchema(db *sql.DB) error {
 		`ALTER TABLE kit_readings ADD COLUMN IF NOT EXISTS no3_mg_l DOUBLE PRECISION`,
 		`ALTER TABLE kit_readings ADD COLUMN IF NOT EXISTS kh_dkh DOUBLE PRECISION`,
 		`ALTER TABLE pond_config ADD COLUMN IF NOT EXISTS system_type VARCHAR(16) NOT NULL DEFAULT 'pond'`,
+		`CREATE TABLE IF NOT EXISTS measure_schedule (
+			device_id VARCHAR(64) PRIMARY KEY,
+			auto_enabled BOOLEAN NOT NULL DEFAULT false,
+			temp_interval INT NOT NULL DEFAULT 1800,
+			ph_interval INT NOT NULL DEFAULT 1800,
+			turb_interval INT NOT NULL DEFAULT -1,
+			tds_interval INT NOT NULL DEFAULT 3600,
+			updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil {

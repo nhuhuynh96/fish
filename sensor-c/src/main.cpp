@@ -27,7 +27,34 @@ static void publishCommandError(const String &message) {
     mqttHandler.publish("event", payload);
 }
 
-// {"action":"ph"|"temp"|"tds"|"measure_all"}
+static bool parseState(JsonVariantConst v, bool &on) {
+    if (v.is<bool>()) {
+        on = v.as<bool>();
+        return true;
+    }
+    if (v.is<int>()) {
+        on = v.as<int>() != 0;
+        return true;
+    }
+    if (v.is<const char *>()) {
+        String s = v.as<const char *>();
+        s.toLowerCase();
+        s.trim();
+        if (s == "on" || s == "true" || s == "1") {
+            on = true;
+            return true;
+        }
+        if (s == "off" || s == "false" || s == "0") {
+            on = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+// {"action":"power","sensor":"ph"|"temp"|"tds"|"all","state":true|false,"max_on_s":300}
+// {"action":"power_status"}
+// {"action":"ph"|"temp"|"tds"|"measure_all","samples":40,"interval_ms":100}
 void handleMqttCommand(const String &msg) {
     JsonDocument doc;
     if (deserializeJson(doc, msg)) {
@@ -44,7 +71,24 @@ void handleMqttCommand(const String &msg) {
     }
 
     LOGF("[Command] action=%s\n", action.c_str());
-    sensorManager.request(action);
+    if (action == "power") {
+        String sensor = doc["sensor"] | "";
+        sensor.toLowerCase();
+        sensor.trim();
+        bool on = false;
+        if (sensor.length() == 0 || !parseState(doc["state"], on)) {
+            publishCommandError("Lệnh power cần sensor và state. Ví dụ: {\"action\":\"power\",\"sensor\":\"ph\",\"state\":true}");
+            return;
+        }
+        int maxOnS = doc["max_on_s"] | 0;
+        sensorManager.setPower(sensor, on, maxOnS > 0 ? (uint32_t)maxOnS : 0);
+        return;
+    }
+    if (action == "power_status") {
+        sensorManager.publishPowerStatus();
+        return;
+    }
+    sensorManager.request(action, doc["samples"] | 0, doc["interval_ms"] | 0);
 }
 
 void setup() {
@@ -165,7 +209,8 @@ void loop() {
             String telemetry = "{\"device_id\":\"" + currentConfig.device_id + "\",";
             telemetry += "\"rssi\":" + String(WiFi.RSSI()) + ",";
             telemetry += "\"uptime\":" + String(millis() / 1000) + ",";
-            telemetry += "\"state\":\"" + String(sensorManager.isBusy() ? "MEASURING" : "IDLE") + "\"}";
+            telemetry += "\"state\":\"" + String(sensorManager.isBusy() ? "MEASURING" : "IDLE") + "\",";
+            telemetry += "\"power\":" + sensorManager.powerJson() + "}";
             mqttHandler.publish("telemetry", telemetry);
         }
     }

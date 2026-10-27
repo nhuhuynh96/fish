@@ -3,7 +3,7 @@ import React from 'react';
 export default function LiveSamplingTimeline({ jobPhase, latestEvent }) {
   const steps = [
     { key: 'fill', label: '1. Chỉnh mực', desc: 'Nhiệt độ và pH: phao 1. TDS: phao 2' },
-    { key: 'measure', label: '2. Đo', desc: 'Từng sensor' },
+    { key: 'measure', label: '2. Bật nguồn và đo', desc: 'Từng sensor' },
     { key: 'final_drain', label: '3. Xả 90s', desc: 'Sau khi đo xong' },
   ];
 
@@ -23,7 +23,7 @@ export default function LiveSamplingTimeline({ jobPhase, latestEvent }) {
         Tiến Trình Đo Cảm Biến
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-        Lịch đo tự động: pH và nhiệt độ ở phao 1 (đo pH trước), TDS ở phao 2. Thiếu thì bơm, dư thì xả. Đo xong xả 90 giây.
+        Lịch đo tự động: pH và nhiệt độ ở phao 1 (đo pH trước), TDS ở phao 2. Thiếu thì bơm, dư thì xả. Mỗi sensor bật nguồn, chờ (pH 30 giây), đọc rồi tắt; pH và TDS không bật cùng lúc. Đo xong xả 90 giây.
       </p>
 
       <div className="timeline-stepper">

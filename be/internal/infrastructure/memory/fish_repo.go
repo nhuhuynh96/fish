@@ -16,6 +16,7 @@ type Store struct {
 	calibrations map[string]*fish.DeviceCalibration
 	pond         *fish.PondConfig
 	kits         map[string][]fish.KitReading
+	schedules    map[string]fish.MeasureSchedule
 }
 
 func NewStore() *Store {
@@ -25,7 +26,38 @@ func NewStore() *Store {
 		devices:      make(map[string]*fish.Device),
 		calibrations: make(map[string]*fish.DeviceCalibration),
 		kits:         make(map[string][]fish.KitReading),
+		schedules:    make(map[string]fish.MeasureSchedule),
 	}
+}
+
+func (s *Store) GetSchedule(ctx context.Context, deviceID string) (*fish.MeasureSchedule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m, ok := s.schedules[deviceID]
+	if !ok {
+		return nil, nil
+	}
+	return &m, nil
+}
+
+func (s *Store) SaveSchedule(ctx context.Context, m *fish.MeasureSchedule) error {
+	if m == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.schedules[m.DeviceID] = *m.Normalize()
+	return nil
+}
+
+func (s *Store) ListSchedules(ctx context.Context) ([]fish.MeasureSchedule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list := make([]fish.MeasureSchedule, 0, len(s.schedules))
+	for _, m := range s.schedules {
+		list = append(list, m)
+	}
+	return list, nil
 }
 
 // MeasurementRepository implementation

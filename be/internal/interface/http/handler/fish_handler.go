@@ -141,94 +141,60 @@ func (h *FishHandler) SetSchedule(c *gin.Context) {
 		return
 	}
 
+	// Khoảng đo: -1 không đo, 0 đo liên tục, > 0 số giây. Trường bỏ trống giữ giá trị cũ.
 	var req struct {
-		AutoEnabled  bool `json:"auto_enabled"`
-		TempInterval int  `json:"temp_interval"`
-		PhInterval   int  `json:"ph_interval"`
-		TurbInterval int  `json:"turb_interval"`
-		TdsInterval  int  `json:"tds_interval"`
+		AutoEnabled  *bool `json:"auto_enabled"`
+		TempInterval *int  `json:"temp_interval"`
+		PhInterval   *int  `json:"ph_interval"`
+		TurbInterval *int  `json:"turb_interval"`
+		TdsInterval  *int  `json:"tds_interval"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respond.BadRequest(c, "invalid body")
 		return
 	}
-
-	// Default fallback values if 0
-	if req.TempInterval <= 0 {
-		req.TempInterval = 60
-	}
-	if req.PhInterval <= 0 {
-		req.PhInterval = 120
-	}
-	if req.TurbInterval <= 0 {
-		req.TurbInterval = 180
-	}
-	if req.TdsInterval <= 0 {
-		req.TdsInterval = 300
-	}
-
-	if h.sched != nil {
-		h.sched.EnsureDevice(deviceID)
-		h.sched.SetDeviceSchedule(deviceID, req.AutoEnabled, req.TempInterval, req.PhInterval, req.TurbInterval, req.TdsInterval)
-	}
-
-	if err := h.svc.SetSchedule(c.Request.Context(), deviceID, req.AutoEnabled, req.TempInterval, req.PhInterval, req.TurbInterval, req.TdsInterval); err != nil {
-		respond.InternalError(c, err.Error())
+	if h.sched == nil {
+		respond.InternalError(c, "scheduler not configured")
 		return
 	}
 
-	respond.OK(c, gin.H{
-		"message":       "Schedule updated successfully",
-		"device":        deviceID,
-		"auto_enabled":  req.AutoEnabled,
-		"temp_interval": req.TempInterval,
-		"ph_interval":   req.PhInterval,
-		"turb_interval": req.TurbInterval,
-		"tds_interval":  req.TdsInterval,
-	})
+	cfg := *h.sched.GetDeviceSchedule(deviceID)
+	if req.AutoEnabled != nil {
+		cfg.AutoEnabled = *req.AutoEnabled
+	}
+	if req.TempInterval != nil {
+		cfg.TempInterval = *req.TempInterval
+	}
+	if req.PhInterval != nil {
+		cfg.PhInterval = *req.PhInterval
+	}
+	if req.TurbInterval != nil {
+		cfg.TurbInterval = *req.TurbInterval
+	}
+	if req.TdsInterval != nil {
+		cfg.TdsInterval = *req.TdsInterval
+	}
+
+	saved, err := h.sched.SetDeviceSchedule(c.Request.Context(), cfg)
+	if err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+	respond.OK(c, saved)
 }
 
-// 2b2. Lấy cấu hình lịch đo hiện tại từ backend scheduler
+// 2b2. Lấy cấu hình lịch đo đã lưu
 func (h *FishHandler) GetSchedule(c *gin.Context) {
 	deviceID := c.Param("id")
 	if deviceID == "" {
 		respond.BadRequest(c, "missing device id")
 		return
 	}
-
 	if h.sched == nil {
-		respond.OK(c, gin.H{
-			"device_id":     deviceID,
-			"auto_enabled":  false,
-			"temp_interval": 60,
-			"ph_interval":   120,
-			"turb_interval": 180,
-			"tds_interval":  300,
-		})
+		respond.OK(c, fish.DefaultMeasureSchedule(deviceID))
 		return
 	}
-
-	sched := h.sched.GetDeviceSchedule(deviceID)
-	if sched == nil {
-		respond.OK(c, gin.H{
-			"device_id":     deviceID,
-			"auto_enabled":  false,
-			"temp_interval": 60,
-			"ph_interval":   120,
-			"turb_interval": 180,
-			"tds_interval":  300,
-		})
-		return
-	}
-
-	respond.OK(c, gin.H{
-		"device_id":     deviceID,
-		"auto_enabled":  sched.AutoEnabled,
-		"temp_interval": int(sched.TempInterval.Seconds()),
-		"ph_interval":   int(sched.PhInterval.Seconds()),
-		"turb_interval": int(sched.TurbInterval.Seconds()),
-		"tds_interval":  int(sched.TdsInterval.Seconds()),
-	})
+	respond.OK(c, h.sched.GetDeviceSchedule(deviceID))
 }
 
 // 2c. Bật / tắt tự động đo
@@ -247,11 +213,11 @@ func (h *FishHandler) ToggleAuto(c *gin.Context) {
 		return
 	}
 
-	if h.sched != nil {
-		h.sched.ToggleAuto(deviceID, req.Enabled)
+	if h.sched == nil {
+		respond.InternalError(c, "scheduler not configured")
+		return
 	}
-
-	if err := h.svc.ToggleAuto(c.Request.Context(), deviceID, req.Enabled); err != nil {
+	if _, err := h.sched.ToggleAuto(c.Request.Context(), deviceID, req.Enabled); err != nil {
 		respond.InternalError(c, err.Error())
 		return
 	}

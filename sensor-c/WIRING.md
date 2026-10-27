@@ -1,6 +1,6 @@
 # Sơ đồ đấu nối cảm biến (ESP32-S3)
 
-Khớp firmware `sensor-c`. GPIO 5, GPIO 7 và GPIO 9 là output, mức thấp khi không đo, chỉ lên cao đúng lúc đo cảm biến đó.
+Khớp firmware `sensor-c`. GPIO 5, GPIO 7 và GPIO 9 là output, mức thấp lúc khởi động. Chỉ lên cao khi backend gửi lệnh `power` qua MQTT (xem cuối file).
 
 ## Nguồn
 
@@ -49,7 +49,7 @@ Po ── 10 kΩ ── GPIO 6 ── 20 kΩ ── GND
 
 Điện trở 1 kΩ chỉ trên đường điều khiển transistor. Đường 5 V sang VCC mạch pH đi qua 2N3906, không qua điện trở 1 kΩ. Que pH cắm vào mạch pH.
 
-GPIO 7 lên cao khoảng 2 giây khi có lệnh `ph`, rồi về thấp. Lúc chân này thấp, mạch pH mất điện và GPIO 6 về 0 V.
+GPIO 7 lên cao khi có lệnh bật nguồn pH, về thấp khi có lệnh tắt. Lúc chân này thấp, mạch pH mất điện và GPIO 6 về 0 V.
 
 ## TDS Meter V1.0
 
@@ -59,7 +59,7 @@ GPIO 8 ── A
 GND ──── GND
 ```
 
-Không có cầu chia trên chân A. Hai chân que TDS cắm vào jack trên mạch TDS. GPIO 9 chỉ lên cao khi có lệnh `tds`.
+Không có cầu chia trên chân A. Hai chân que TDS cắm vào jack trên mạch TDS. GPIO 9 chỉ lên cao khi có lệnh bật nguồn TDS.
 
 ## Chân ESP32-S3
 
@@ -71,3 +71,26 @@ Không có cầu chia trên chân A. Hai chân que TDS cắm vào jack trên m�
 | GPIO 7 | Bật nguồn pH |
 | GPIO 8 | A của TDS |
 | GPIO 9 | VCC của TDS |
+
+## Lệnh MQTT
+
+Topic `fish/<device_id>/command`. Backend bật nguồn, chờ, đọc rồi tắt; firmware không tự bật tắt khi đọc.
+
+| Lệnh | Việc |
+|---|---|
+| `{"action":"power","sensor":"ph","state":true,"max_on_s":300}` | Bật nguồn pH. `sensor` là `ph`, `temp` hoặc `tds` |
+| `{"action":"power","sensor":"ph","state":false}` | Tắt nguồn pH |
+| `{"action":"power","sensor":"all","state":false}` | Tắt cả ba |
+| `{"action":"power_status"}` | Trả trạng thái nguồn |
+| `{"action":"ph","samples":40,"interval_ms":100}` | Đọc pH. Chưa bật nguồn thì báo `sensor_error` |
+| `{"action":"temp"}`, `{"action":"tds","samples":20}` | Đọc nhiệt độ, TDS |
+
+Mỗi lệnh `power` trả sự kiện `{"stage":"power","sensor":"ph","power":true}` trên topic `event`. Telemetry 30 giây có thêm `"power":{"temp":false,"ph":true,"tds":false}`.
+
+Firmware vẫn tự tắt trong ba trường hợp:
+
+- pH và TDS không được có điện cùng lúc. Bật cái này khi cái kia đang bật thì bị từ chối bằng `command_error`.
+- Bật quá `max_on_s` (mặc định 300, tối đa 1800) thì tự tắt và gửi `power_timeout`.
+- Mất MQTT thì tắt cả ba.
+
+Giá trị đọc là trung bình các mẫu sau khi bỏ 20% thấp nhất và 20% cao nhất.

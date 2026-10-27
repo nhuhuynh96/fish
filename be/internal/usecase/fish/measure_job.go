@@ -17,6 +17,8 @@ const (
 	levelWaitLimit        = 30 * time.Second
 	waterWaitSlack        = 30 * time.Second
 	sensorWaitLimit       = 60 * time.Second
+	sensorPowerWaitLimit  = 10 * time.Second
+	sensorMaxOnS          = 300
 	fillDurationS         = 180
 	drainToLevelDurationS = 120
 	finalDrainDurationS   = 90
@@ -25,13 +27,29 @@ const (
 // Đo pH ngay sau khi bơm cho kết quả cao hơn khoảng 0,5 do nước chưa ổn định.
 var waterSettleDelay = 45 * time.Second
 
+type sensorTiming struct {
+	Warmup     time.Duration
+	Samples    int
+	IntervalMs int
+}
+
+// Mạch pH cần 10-30 giây sau khi cấp nguồn mới ổn định; đọc sau 1 giây mỗi lần lệch tới ±0,2 pH.
+var sensorTimings = map[string]sensorTiming{
+	"ph":   {Warmup: 30 * time.Second, Samples: 40, IntervalMs: 100},
+	"temp": {Warmup: 1 * time.Second},
+	"tds":  {Warmup: 5 * time.Second, Samples: 20, IntervalMs: 100},
+}
+
 type waterSig struct {
 	Stage string
 	Level int
 }
 
 type sensorSig struct {
+	Stage   string
 	Names   []string
+	Sensor  string
+	Power   bool
 	Failed  bool
 	Message string
 }
@@ -54,7 +72,7 @@ func (s *Service) armWater() chan waterSig {
 }
 
 func (s *Service) armSensor() chan sensorSig {
-	ch := make(chan sensorSig, 4)
+	ch := make(chan sensorSig, 8)
 	s.jobMu.Lock()
 	s.sensorWait = ch
 	s.jobMu.Unlock()
@@ -65,10 +83,6 @@ func (s *Service) noteWater(topicID, bodyID, stage string, level int, message st
 	id := bodyID
 	if id == "" {
 		id = topicID
-	}
-	if id == sensorDeviceID && stage == "sensor_error" {
-		s.noteSensor(topicID, bodyID, nil, true, message)
-		return
 	}
 	if id != waterDeviceID && topicID != waterDeviceID {
 		return
@@ -85,7 +99,16 @@ func (s *Service) noteWater(topicID, bodyID, stage string, level int, message st
 	}
 }
 
-func (s *Service) noteSensor(topicID, bodyID string, names []string, failed bool, message string) {
+func (s *Service) noteSensorEvent(topicID, bodyID, stage, sensor string, power bool, message string) {
+	switch stage {
+	case "sensor_error", "command_error":
+		s.noteSensor(topicID, bodyID, sensorSig{Stage: stage, Failed: true, Message: message})
+	case "power", "power_timeout":
+		s.noteSensor(topicID, bodyID, sensorSig{Stage: stage, Sensor: sensor, Power: power, Message: message})
+	}
+}
+
+func (s *Service) noteSensor(topicID, bodyID string, sig sensorSig) {
 	id := bodyID
 	if id == "" {
 		id = topicID
@@ -100,7 +123,7 @@ func (s *Service) noteSensor(topicID, bodyID string, names []string, failed bool
 		return
 	}
 	select {
-	case ch <- sensorSig{Names: names, Failed: failed, Message: message}:
+	case ch <- sig:
 	default:
 	}
 }
@@ -125,23 +148,24 @@ func (s *Service) runMeasure(_ string, sensors []string) {
 	log.Printf("[MeasureJob] đo %v: chỉnh mực theo từng sensor, đo, rồi xả %ds", want, finalDrainDurationS)
 
 	var measureErr error
+	if err := s.sensorPower(ctx, "all", false); err != nil {
+		measureErr = fmt.Errorf("tắt nguồn cảm biến: %w", err)
+	}
 	for _, action := range want {
+		if measureErr != nil {
+			break
+		}
 		moved, err := s.ensureLevel(ctx, sensorFillLevel(action))
 		if err != nil {
 			measureErr = fmt.Errorf("%s: %w", sensorLabel(action), err)
 			break
 		}
-		if moved && waterSettleDelay > 0 {
-			s.recordJob(ctx, waterDeviceID, "settle", fmt.Sprintf("Chờ nước ổn định %d giây rồi đo.", int(waterSettleDelay.Seconds())))
-			if err := sleepCtx(ctx, waterSettleDelay); err != nil {
-				measureErr = err
-				break
-			}
+		var settle time.Duration
+		if moved {
+			settle = waterSettleDelay
 		}
-		s.recordJob(ctx, sensorDeviceID, "measure", fmt.Sprintf("Đo %s.", sensorLabel(action)))
-		if err := s.measureOne(ctx, action); err != nil {
+		if err := s.measureSensor(ctx, action, settle); err != nil {
 			measureErr = err
-			break
 		}
 	}
 
@@ -154,6 +178,79 @@ func (s *Service) runMeasure(_ string, sensors []string) {
 		return
 	}
 	s.recordJob(ctx, sensorDeviceID, "job_done", "Đo xong.")
+}
+
+// Đo ngay từ dashboard: bật nguồn, chờ, đọc, tắt từng sensor; không bơm hay xả.
+func (s *Service) runManualMeasure(sensors []string) {
+	defer s.finishJob()
+	ctx := context.Background()
+	want := normalizeSensors(sensors)
+	log.Printf("[MeasureJob] đo ngay %v, không chỉnh mực nước", want)
+
+	var measureErr error
+	if err := s.sensorPower(ctx, "all", false); err != nil {
+		measureErr = fmt.Errorf("tắt nguồn cảm biến: %w", err)
+	}
+	for _, action := range want {
+		if measureErr != nil {
+			break
+		}
+		measureErr = s.measureSensor(ctx, action, 0)
+	}
+	if measureErr != nil {
+		s.recordJob(ctx, sensorDeviceID, "job_failed", measureErr.Error())
+		return
+	}
+	s.recordJob(ctx, sensorDeviceID, "job_done", "Đo xong.")
+}
+
+// Bật nguồn, chờ đủ lâu hơn giữa thời gian làm ấm và thời gian nước ổn định, đọc, rồi luôn tắt nguồn.
+func (s *Service) measureSensor(ctx context.Context, action string, settle time.Duration) (err error) {
+	t := sensorTimings[action]
+	label := sensorLabel(action)
+	// Tắt cả khi lệnh bật lỗi: mất phản hồi không có nghĩa là mạch chưa bật.
+	defer func() {
+		if offErr := s.sensorPower(context.Background(), action, false); offErr != nil && err == nil {
+			err = fmt.Errorf("tắt nguồn %s: %w", label, offErr)
+		}
+	}()
+	if err := s.sensorPower(ctx, action, true); err != nil {
+		return fmt.Errorf("bật nguồn %s: %w", label, err)
+	}
+
+	wait := t.Warmup
+	if settle > wait {
+		wait = settle
+	}
+	if wait > 0 {
+		msg := fmt.Sprintf("Bật nguồn %s, chờ %d giây rồi đo.", label, int(wait.Seconds()))
+		if settle > 0 {
+			msg = fmt.Sprintf("Bật nguồn %s, chờ %d giây cho nước ổn định và cảm biến làm ấm rồi đo.", label, int(wait.Seconds()))
+		}
+		s.recordJob(ctx, sensorDeviceID, "warmup", msg)
+		if err := sleepCtx(ctx, wait); err != nil {
+			return err
+		}
+	}
+
+	s.recordJob(ctx, sensorDeviceID, "measure", fmt.Sprintf("Đo %s.", label))
+	return s.measureOne(ctx, action, t)
+}
+
+// sensor "all" chỉ dùng để tắt.
+func (s *Service) sensorPower(ctx context.Context, sensor string, on bool) error {
+	ch := s.armSensor()
+	maxOnS := 0
+	if on {
+		maxOnS = sensorMaxOnS
+	}
+	if err := s.pub.PublishSensorPower(ctx, sensorDeviceID, sensor, on, maxOnS); err != nil {
+		return err
+	}
+	_, err := waitSensor(ctx, ch, sensorPowerWaitLimit, func(sig sensorSig) bool {
+		return sig.Stage == "power" && sig.Sensor == sensor && sig.Power == on
+	})
+	return err
 }
 
 func (s *Service) queryLevel(ctx context.Context) (int, error) {
@@ -248,17 +345,22 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func (s *Service) measureOne(ctx context.Context, action string) error {
+func (s *Service) measureOne(ctx context.Context, action string, t sensorTiming) error {
 	ch := s.armSensor()
-	if err := s.pub.PublishMeasure(ctx, sensorDeviceID, []string{action}); err != nil {
+	if err := s.pub.PublishRead(ctx, sensorDeviceID, action, t.Samples, t.IntervalMs); err != nil {
 		return err
 	}
 	want := action
 	if action == "temp" {
 		want = "temperature"
 	}
-	_, err := waitSensor(ctx, ch, want)
-	return err
+	_, err := waitSensor(ctx, ch, sensorWaitLimit, func(sig sensorSig) bool {
+		return sig.Stage == "data" && contains(sig.Names, want)
+	})
+	if err != nil {
+		return fmt.Errorf("đọc %s: %w", sensorLabel(action), err)
+	}
+	return nil
 }
 
 func waitWater(ctx context.Context, ch <-chan waterSig, limit time.Duration, accept func(waterSig) bool) (waterSig, error) {
@@ -281,8 +383,8 @@ func waitWater(ctx context.Context, ch <-chan waterSig, limit time.Duration, acc
 	}
 }
 
-func waitSensor(ctx context.Context, ch <-chan sensorSig, want string) (sensorSig, error) {
-	timer := time.NewTimer(sensorWaitLimit)
+func waitSensor(ctx context.Context, ch <-chan sensorSig, limit time.Duration, accept func(sensorSig) bool) (sensorSig, error) {
+	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	for {
 		select {
@@ -294,11 +396,11 @@ func waitSensor(ctx context.Context, ch <-chan sensorSig, want string) (sensorSi
 				}
 				return sig, fmt.Errorf("%s", msg)
 			}
-			if contains(sig.Names, want) {
+			if accept(sig) {
 				return sig, nil
 			}
 		case <-timer.C:
-			return sensorSig{}, fmt.Errorf("hết thời gian chờ sensor %s", want)
+			return sensorSig{}, fmt.Errorf("hết thời gian chờ sensor")
 		case <-ctx.Done():
 			return sensorSig{}, ctx.Err()
 		}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
 )
@@ -37,48 +36,27 @@ func (p *CommandPublisher) PublishLevel(ctx context.Context, deviceID string) er
 	return p.publishCommand(deviceID, "level")
 }
 
-func (p *CommandPublisher) PublishMeasure(ctx context.Context, deviceID string, sensors []string) error {
+// sensor "ph" | "temp" | "tds" | "all" (chỉ tắt). maxOnS 0 = mặc định của firmware.
+func (p *CommandPublisher) PublishSensorPower(ctx context.Context, deviceID string, sensor string, on bool, maxOnS int) error {
 	_ = ctx
-	actions := expandMeasureActions(sensors)
-	if len(actions) == 0 {
-		return fmt.Errorf("no supported sensors in %v", sensors)
+	body := map[string]any{"action": "power", "sensor": sensor, "state": on}
+	if on && maxOnS > 0 {
+		body["max_on_s"] = maxOnS
 	}
-	for _, action := range actions {
-		if err := p.publishCommand(deviceID, action); err != nil {
-			return err
-		}
-	}
-	return nil
+	return p.publish(deviceID, body)
 }
 
-func expandMeasureActions(sensors []string) []string {
-	if len(sensors) == 0 {
-		sensors = []string{"all"}
+// Chỉ đọc, firmware không bật tắt nguồn. samples và intervalMs 0 = mặc định của firmware.
+func (p *CommandPublisher) PublishRead(ctx context.Context, deviceID string, sensor string, samples, intervalMs int) error {
+	_ = ctx
+	body := map[string]any{"action": sensor}
+	if samples > 0 {
+		body["samples"] = samples
 	}
-	seen := map[string]bool{}
-	var out []string
-	add := func(action string) {
-		if seen[action] {
-			return
-		}
-		seen[action] = true
-		out = append(out, action)
+	if intervalMs > 0 {
+		body["interval_ms"] = intervalMs
 	}
-	for _, raw := range sensors {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
-		case "all", "tat_ca":
-			add("ph")
-			add("temp")
-			add("tds")
-		case "ph":
-			add("ph")
-		case "temp", "temperature", "nhiet_do":
-			add("temp")
-		case "tds", "chat_ran", "chat_luong":
-			add("tds")
-		}
-	}
-	return out
+	return p.publish(deviceID, body)
 }
 
 // level 0 và duration 0 thì không gửi, firmware chạy theo thời gian mặc định 60 giây.
