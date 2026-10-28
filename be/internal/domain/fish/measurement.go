@@ -70,7 +70,7 @@ type CommandPublisher interface {
 	PublishSensorPower(ctx context.Context, deviceID string, sensor string, on bool, maxOnS int) error
 	PublishRead(ctx context.Context, deviceID string, sensor string, samples, intervalMs int) error
 	PublishLevel(ctx context.Context, deviceID string) error
-	PublishPump(ctx context.Context, deviceID string, target string, state bool, level, duration int) error
+	PublishPump(ctx context.Context, deviceID string, target string, state bool, untilFloat bool, duration int) error
 	PublishClearQueue(ctx context.Context, deviceID string) error
 	PublishSchedule(ctx context.Context, deviceID string, enabled bool, temp, ph, turb, tds int) error
 	PublishAutoToggle(ctx context.Context, deviceID string, enabled bool) error

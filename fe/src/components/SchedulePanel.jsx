@@ -132,7 +132,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
       </div>
 
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Auto: pH rồi nhiệt độ ở phao 1 (thiếu thì bơm, dư thì xả tới khi phao 2 tắt), TDS ở phao 2 (thiếu thì bơm), đo xong xả 90 giây.
+        Auto: bơm tới khi phao đầy (đã đầy thì không bơm), đo pH, nhiệt độ, TDS, rồi xả tới khi phao tắt và xả thêm 20 giây.
       </p>
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
         Khoảng đo lưu trong database: <b>-1</b> không đo, <b>0</b> đo liên tục (xong lượt này chạy lượt kế, bơm và xả liên tục),

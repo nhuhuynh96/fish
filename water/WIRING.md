@@ -57,25 +57,22 @@ Dùng tiếp điểm NO (thường mở). Mất điện ESP32 hoặc relay thì 
 
 Bơm 220 V thì không gắn diode. Thay bằng mạch RC (100 Ω nối tiếp 100 nF loại 275 V AC) song song với bơm, và dùng relay chịu được 220 V.
 
-Bơm xả không nên chạy khô lâu. Lệnh `drain_on` không kèm `level` chạy đủ `duration` kể cả khi bình đã cạn, nên dùng `duration` ngắn (10–20 giây) khi xả nốt nước đọng.
+Bơm xả không nên chạy khô lâu. Lệnh `drain_on` không kèm `until_empty` chạy đủ `duration` kể cả khi bình đã cạn, nên dùng `duration` ngắn (10–20 giây) khi xả nốt nước đọng.
 
 ## Phao mực nước
 
-Mỗi phao là một công tắc hai dây. Nước chạm phao thì công tắc đóng, kéo GPIO xuống GND.
+Chỉ một phao, lắp ở mực "đầy" (đủ ngập cả ba que đo). Phao là công tắc hai dây: nước chạm phao thì công tắc đóng, kéo GPIO 17 xuống GND.
 
 ```
-3V3 ── 10 kΩ ──┬── GPIO 17 ── dây phao 1 ── phao 1 (mực thấp) ── GND
-               └── 100 nF ── GND
-
-3V3 ── 10 kΩ ──┬── GPIO 4 ─── dây phao 2 ── phao 2 (mực cao) ─── GND
+3V3 ── 10 kΩ ──┬── GPIO 17 ── dây phao ── phao (mực đầy) ── GND
                └── 100 nF ── GND
 ```
 
-Firmware đã bật điện trở kéo lên bên trong, nhưng điện trở đó khoảng 45 kΩ, yếu khi dây phao dài và chạy gần dây bơm. Điện trở 10 kΩ lên 3V3 và tụ 100 nF xuống GND, đặt sát chân ESP32, giúp phao không nhảy sai khi bơm chạy. Firmware lọc thêm 800 ms.
+Firmware đã bật điện trở kéo lên bên trong, nhưng điện trở đó khoảng 45 kΩ, yếu khi dây phao dài và chạy gần dây bơm. Điện trở 10 kΩ lên 3V3 và tụ 100 nF xuống GND, đặt sát chân ESP32, giúp phao không nhảy sai khi bơm chạy. Firmware chỉ đổi trạng thái phao khi chân giữ nguyên 800 ms.
 
-Phao 1 lắp thấp hơn phao 2. Firmware tính mực nước: không phao nào đóng là 0, phao 1 đóng là 1, phao 2 đóng là 2.
+GPIO 4 (phao 2 cũ) không còn dùng, tháo dây ra.
 
-Phao loại hai trạng thái thường mở hoặc thường đóng tùy chiều lắp. Lật phao để khi nước dâng lên thì công tắc đóng. Kiểm tra bằng log khởi động: `GPIO17=0` nghĩa là phao 1 đang đóng.
+Phao loại hai trạng thái thường mở hoặc thường đóng tùy chiều lắp. Lật phao để khi nước dâng lên thì công tắc đóng. Kiểm tra bằng log khởi động: `GPIO17=0 (đầy)` nghĩa là phao đang đóng.
 
 ## Đi dây
 
@@ -89,47 +86,55 @@ Phao loại hai trạng thái thường mở hoặc thường đóng tùy chiề
 |---|---|
 | GPIO 18 | IN1 relay bơm nạp, LOW = bật |
 | GPIO 19 | IN2 relay bơm xả, LOW = bật |
-| GPIO 17 | Phao 1 (mực thấp), LOW = có nước |
-| GPIO 4 | Phao 2 (mực cao), LOW = có nước |
+| GPIO 17 | Phao (mực đầy), LOW = có nước |
 | GPIO 0 | Nút BOOT, giữ 3 giây để mở AP cấu hình |
 
-GPIO 16 và 17 bị PSRAM chiếm trên module ESP32-WROVER. Board đang dùng là ESP32 dev thường (WROOM), GPIO 17 dùng được. Đổi sang board WROVER thì phải dời phao 1 sang chân khác và sửa `FLOAT_LOW_PIN` trong firmware.
+GPIO 16 và 17 bị PSRAM chiếm trên module ESP32-WROVER. Board đang dùng là ESP32 dev thường (WROOM), GPIO 17 dùng được. Đổi sang board WROVER thì phải dời phao sang chân khác và sửa `FLOAT_PIN` trong firmware.
 
 ## Lệnh MQTT
 
-Gửi lệnh vào `fish/water/command`. Kết quả trả về `fish/water/event`.
+Gửi lệnh vào `fish/water/command`. Kết quả trả về `fish/water/event`. Mạch chỉ làm theo lệnh; backend quyết định khi nào bơm, khi nào xả.
 
 | Lệnh | Tham số | Dừng khi |
 |---|---|---|
-| `inlet_on` | `level` 1/2 (tùy chọn), `duration` giây (mặc định 60, 1–300) | Có `level`: phao đó đóng hoặc hết `duration`, cái nào trước. Không có `level`: hết `duration` |
-| `drain_on` | `level` 1/2 (tùy chọn), `duration` giây (mặc định 60, 1–300) | Có `level`: phao đó tắt hoặc hết `duration`, cái nào trước. Không có `level`: hết `duration` |
-| `inlet_off` | | Tắt bơm nạp ngay, hủy lệnh đang chạy |
-| `drain_off` | | Tắt bơm xả ngay, hủy lệnh đang chạy |
-| `level` | | Trả mực hiện tại ngay, sự kiện `water_level` |
-| `clear_queue` | | Xóa hàng đợi, tắt cả hai bơm |
+| `inlet_on` | `until_full` (mặc định `true`), `duration` giây (mặc định 60, 1–300) | `until_full`: phao đầy hoặc hết `duration`, cái nào trước. `until_full: false`: hết `duration` |
+| `drain_on` | `until_empty` (mặc định `false`), `duration` giây (mặc định 60, 1–300) | `until_empty`: phao tắt hoặc hết `duration`, cái nào trước. Không có: hết `duration` |
+| `inlet_off` | | Tắt bơm nạp ngay |
+| `drain_off` | | Tắt bơm xả ngay |
+| `stop` | | Tắt cả hai bơm (`clear_queue` cũng làm việc này) |
+| `float` | | Trả trạng thái phao ngay, sự kiện `water_level` (`level` là tên cũ, vẫn nhận) |
 
-`drain_on` với `level: 2` xả tới khi phao 2 tắt, còn khoảng mực 1. Với `level: 1` xả tới khi phao 1 tắt, mực 0. Phao 2 không tự chặn bơm nạp: `inlet_on` không kèm `level` bơm đủ `duration` kể cả khi nước đã đầy.
+Không có hàng đợi. `inlet_on` hoặc `drain_on` đến lúc đang có bơm chạy thì bị từ chối bằng `command_error`; gửi `stop` hoặc lệnh off trước.
 
-`inlet_on` và `drain_on` vào hàng đợi. Lệnh sau chờ lệnh trước dừng hẳn mới chạy.
+Firmware vẫn tự tắt bơm khi:
 
-Ví dụ:
+- tới phao (nếu lệnh có `until_full` / `until_empty`),
+- hết `duration`,
+- mất MQTT.
+
+Hai bơm không bao giờ chạy cùng lúc.
+
+Ví dụ một lượt đo:
 
 ```json
-{"action":"inlet_on","level":2,"duration":45}
-{"action":"drain_on","level":1}
-{"action":"drain_on","duration":15}
+{"action":"inlet_on","until_full":true,"duration":180}
+{"action":"drain_on","until_empty":true,"duration":120}
+{"action":"drain_on","duration":20}
 ```
 
-Sự kiện trên `fish/water/event`, mỗi sự kiện kèm `level`, `target` (0 nếu không có level), `duration_s`, `inlet_on`, `drain_on`, `float_1`, `float_2`:
+Sự kiện trên `fish/water/event`, mỗi sự kiện kèm `float` (phao đầy hay chưa), `level` (1 nếu phao đầy, 0 nếu chưa), `inlet_on`, `drain_on`. Khi đang chạy bơm có thêm `until_float` và `duration_s`.
 
 | `stage` | Khi nào |
 |---|---|
-| `queued` | Đã xếp lệnh |
 | `filling` / `draining` | Bơm bắt đầu chạy |
-| `filled` / `drained` | Dừng vì tới điều kiện phao |
+| `filled` | Bơm nạp dừng vì phao đầy |
+| `drained` | Bơm xả dừng vì phao tắt |
 | `time_up` | Dừng vì hết `duration` |
-| `already_at_level` | Phao đích đã đạt sẵn, không chạy |
-| `pump_off` / `drain_off` | Tắt do lệnh off |
-| `queue_cleared` | Đã xóa hàng đợi |
-| `water_level` | Trả lời lệnh `level` |
-| `command_error` | Lệnh không hỗ trợ hoặc JSON sai |
+| `already_full` | `inlet_on` với `until_full` khi phao đã đầy, không bơm |
+| `already_empty` | `drain_on` với `until_empty` khi phao đã tắt, không xả |
+| `pump_off` / `drain_off` / `stopped` | Tắt do lệnh |
+| `float_changed` | Phao đổi trạng thái |
+| `water_level` | Trả lời lệnh `float` |
+| `command_error` | Lệnh không hỗ trợ, JSON sai, hoặc đang có bơm chạy |
+
+Telemetry 30 giây có `state` (`IDLE`, `FILLING_WATER`, `DRAINING_WATER`) và `float`.

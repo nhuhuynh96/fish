@@ -87,7 +87,7 @@ func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, senso
 	s.jobRunning = true
 	s.jobPond = deviceID
 	s.jobMu.Unlock()
-	log.Printf("[Usecase] Bắt đầu đo tự động [%s]: chỉnh mực từng sensor, đo, rồi xả %ds: %v", deviceID, finalDrainDurationS, sensors)
+	log.Printf("[Usecase] Bắt đầu đo tự động [%s]: bơm tới khi phao đầy, đo, rồi xả: %v", deviceID, sensors)
 	go s.runMeasure(deviceID, sensors)
 	return nil
 }
@@ -120,15 +120,12 @@ func (s *Service) MeasureNow(ctx context.Context, sensors []string) error {
 	return nil
 }
 
-// 2. Điều khiển bơm nạp / xả thủ công. level 0 = chạy theo thời gian, duration 0 = mặc định của firmware.
-func (s *Service) SetPump(ctx context.Context, deviceID string, target string, state bool, level, duration int) error {
+// 2. Điều khiển bơm nạp / xả thủ công. untilFloat: nạp tới khi phao đầy, xả tới khi phao tắt. duration 0 = mặc định của firmware.
+func (s *Service) SetPump(ctx context.Context, deviceID string, target string, state bool, untilFloat bool, duration int) error {
 	_ = deviceID
 	t := strings.ToLower(strings.TrimSpace(target))
 	if t != "inlet" && t != "drain" {
 		return fmt.Errorf("pump target must be \"inlet\" or \"drain\", got %q", target)
-	}
-	if level < 0 || level > 2 {
-		level = 0
 	}
 	if duration < 0 {
 		duration = 0
@@ -136,8 +133,8 @@ func (s *Service) SetPump(ctx context.Context, deviceID string, target string, s
 	if duration > 300 {
 		duration = 300
 	}
-	log.Printf("[Usecase] Điều khiển bơm [%s] gửi water: state=%v level=%d duration=%ds", t, state, level, duration)
-	return s.pub.PublishPump(ctx, waterDeviceID, t, state, level, duration)
+	log.Printf("[Usecase] Điều khiển bơm [%s] gửi water: state=%v until_float=%v duration=%ds", t, state, untilFloat, duration)
+	return s.pub.PublishPump(ctx, waterDeviceID, t, state, untilFloat, duration)
 }
 
 func (s *Service) ClearQueue(ctx context.Context, deviceID string) error {
@@ -291,6 +288,7 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 		DrainOn    *bool  `json:"drain_on"`
 		FloatFull  *bool  `json:"float_full"`
 		FloatEmpty *bool  `json:"float_empty"`
+		Float      *bool  `json:"float"`
 		Sensor     string `json:"sensor"`
 		// bool ở sự kiện "power", object ở "power_status".
 		Power json.RawMessage `json:"power"`
@@ -304,6 +302,13 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 
 	if body.DeviceID == "" {
 		body.DeviceID = deviceID
+	}
+	if body.FloatFull == nil {
+		body.FloatFull = body.Float
+	}
+	full := body.Level > 0
+	if body.Float != nil {
+		full = *body.Float
 	}
 
 	e := &fish.SamplingEvent{
@@ -330,7 +335,7 @@ func (s *Service) HandleEvent(ctx context.Context, deviceID string, payload []by
 	if s.hub != nil {
 		s.hub.Broadcast("sampling_event", e)
 	}
-	s.noteWater(deviceID, body.DeviceID, body.Stage, body.Level, body.Message)
+	s.noteWater(deviceID, body.DeviceID, body.Stage, full)
 	s.noteSensorEvent(deviceID, body.DeviceID, body.Stage, body.Sensor, powerOn, body.Message)
 
 	return nil

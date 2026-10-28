@@ -33,30 +33,12 @@ const uint32_t DEFAULT_DURATION_S = 60;
 const uint32_t MIN_DURATION_S = 1;
 const uint32_t MAX_DURATION_S = 300;
 
-// 0 = không có level (chạy theo thời gian), 1 = phao 1, 2 = phao 2.
-// fillLevel / FillLevel là kiểu cũ đánh số từ 0.
-static uint8_t parseTarget(JsonDocument &doc) {
-    if (!doc["level"].isNull()) {
-        if (doc["level"].is<const char *>()) {
-            String s = doc["level"].as<const char *>();
-            s.toLowerCase();
-            s.trim();
-            if (s == "high" || s == "hight" || s == "cao" || s == "2") return 2;
-            if (s == "low" || s == "thap" || s == "1") return 1;
-            return 0;
-        }
-        int n = doc["level"].as<int>();
-        if (n >= 2) return 2;
-        if (n == 1) return 1;
-        return 0;
-    }
-    if (!doc["fillLevel"].isNull()) {
-        return doc["fillLevel"].as<int>() >= 1 ? 2 : 1;
-    }
-    if (!doc["FillLevel"].isNull()) {
-        return doc["FillLevel"].as<int>() >= 1 ? 2 : 1;
-    }
-    return 0;
+// until_full / until_empty quyết định có dừng theo phao không. Lệnh cũ gửi "level" > 0 cũng hiểu là dừng theo phao.
+static bool parseUntilFloat(JsonDocument &doc, const char *key, bool fallback) {
+    if (!doc[key].isNull()) return doc[key].as<bool>();
+    if (!doc["until_float"].isNull()) return doc["until_float"].as<bool>();
+    if (!doc["level"].isNull()) return doc["level"].as<int>() > 0;
+    return fallback;
 }
 
 static uint32_t parseDurationMs(JsonDocument &doc) {
@@ -69,8 +51,9 @@ static uint32_t parseDurationMs(JsonDocument &doc) {
     return (uint32_t)seconds * 1000UL;
 }
 
-// {"action":"inlet_on"|"drain_on","level":1|2,"duration":60}
-// {"action":"inlet_off"|"drain_off"|"level"|"clear_queue"}
+// {"action":"inlet_on","until_full":true,"duration":180}
+// {"action":"drain_on","until_empty":true,"duration":120}
+// {"action":"inlet_off"|"drain_off"|"stop"|"float"}
 void handleMqttCommand(const String &msg) {
     String payload = msg;
     payload.trim();
@@ -78,7 +61,7 @@ void handleMqttCommand(const String &msg) {
 
     JsonDocument doc;
     if (deserializeJson(doc, payload)) {
-        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"inlet_on\",\"level\":1,\"duration\":60}");
+        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"inlet_on\",\"until_full\":true,\"duration\":180}");
         return;
     }
 
@@ -90,31 +73,31 @@ void handleMqttCommand(const String &msg) {
         return;
     }
 
-    if (action == "level") {
+    if (action == "float" || action == "level") {
         samplingManager.publishWaterLevel();
         return;
     }
-
+    if (action == "inlet_on" || action == "inlet") {
+        samplingManager.startInlet(parseUntilFloat(doc, "until_full", true), parseDurationMs(doc));
+        return;
+    }
+    if (action == "drain_on") {
+        samplingManager.startDrain(parseUntilFloat(doc, "until_empty", false), parseDurationMs(doc));
+        return;
+    }
     if (action == "inlet_off") {
-        samplingManager.hanldeInletOff();
+        samplingManager.inletOff();
         return;
     }
-
     if (action == "drain_off") {
-        samplingManager.hanldeDrainOff();
+        samplingManager.drainOff();
         return;
     }
-
-    if (action == "clear_queue") {
-        samplingManager.clearQueue();
+    if (action == "stop" || action == "clear_queue") {
+        samplingManager.stopAll("stopped", "Đã tắt cả hai bơm.");
         return;
     }
-
-    PendingCommand cmd;
-    cmd.action = action;
-    cmd.target = parseTarget(doc);
-    cmd.durationMs = parseDurationMs(doc);
-    samplingManager.enqueue(cmd);
+    publishCommandError("action không hỗ trợ: " + action);
 }
 
 void setup() {
@@ -256,7 +239,7 @@ void loop() {
     if (millis() - lastHeartbeat > 30000) {
         lastHeartbeat = millis();
         if (mqttHandler.isConnected()) {
-            String telemetry = "{\"rssi\":" + String(WiFi.RSSI()) + ",\"uptime\":" + String(millis() / 1000) + ",\"state\":\"" + samplingManager.getStateName() + "\",\"queue_size\":" + String((unsigned)samplingManager.queueSize()) + "}";
+            String telemetry = "{\"rssi\":" + String(WiFi.RSSI()) + ",\"uptime\":" + String(millis() / 1000) + ",\"state\":\"" + samplingManager.getStateName() + "\",\"float\":" + String(samplingManager.isFull() ? "true" : "false") + "}";
             mqttHandler.publish("telemetry", telemetry);
             LOGLN("[Main] Đã gửi telemetry lên MQTT.");
         }

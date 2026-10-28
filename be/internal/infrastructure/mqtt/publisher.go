@@ -33,7 +33,7 @@ func (p *CommandPublisher) publishCommand(deviceID, action string) error {
 
 func (p *CommandPublisher) PublishLevel(ctx context.Context, deviceID string) error {
 	_ = ctx
-	return p.publishCommand(deviceID, "level")
+	return p.publishCommand(deviceID, "float")
 }
 
 // sensor "ph" | "temp" | "tds" | "all" (chỉ tắt). maxOnS 0 = mặc định của firmware.
@@ -59,20 +59,19 @@ func (p *CommandPublisher) PublishRead(ctx context.Context, deviceID string, sen
 	return p.publish(deviceID, body)
 }
 
-// level 0 và duration 0 thì không gửi, firmware chạy theo thời gian mặc định 60 giây.
-func (p *CommandPublisher) PublishPump(ctx context.Context, deviceID string, target string, state bool, level, duration int) error {
+// Luôn gửi until_full / until_empty vì firmware mặc định until_full = true. duration 0 = mặc định 60 giây của firmware.
+func (p *CommandPublisher) PublishPump(ctx context.Context, deviceID string, target string, state bool, untilFloat bool, duration int) error {
 	_ = ctx
 	prefix := "inlet"
+	untilKey := "until_full"
 	if target == "drain" {
 		prefix = "drain"
+		untilKey = "until_empty"
 	}
 	if !state {
 		return p.publishCommand(deviceID, prefix+"_off")
 	}
-	body := map[string]any{"action": prefix + "_on"}
-	if level == 1 || level == 2 {
-		body["level"] = level
-	}
+	body := map[string]any{"action": prefix + "_on", untilKey: untilFloat}
 	if duration > 0 {
 		body["duration"] = duration
 	}
@@ -81,7 +80,7 @@ func (p *CommandPublisher) PublishPump(ctx context.Context, deviceID string, tar
 
 func (p *CommandPublisher) PublishClearQueue(ctx context.Context, deviceID string) error {
 	_ = ctx
-	return p.publishCommand(deviceID, "clear_queue")
+	return p.publishCommand(deviceID, "stop")
 }
 
 func (p *CommandPublisher) PublishSchedule(ctx context.Context, deviceID string, enabled bool, temp, ph, turb, tds int) error {

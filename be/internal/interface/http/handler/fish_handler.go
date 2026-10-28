@@ -62,10 +62,11 @@ func (h *FishHandler) Pump(c *gin.Context) {
 	}
 
 	var req struct {
-		Target   string `json:"target"` // "inlet" | "drain"
-		State    bool   `json:"state"`
-		Level    int    `json:"level"`    // 0 = theo thời gian, 1 = phao 1, 2 = phao 2
-		Duration int    `json:"duration"` // giây, 0 = mặc định 60 của firmware, tối đa 300
+		Target string `json:"target"` // "inlet" | "drain"
+		State  bool   `json:"state"`
+		// Bơm nạp dừng khi phao đầy, bơm xả dừng khi phao tắt; false = chạy đủ duration.
+		UntilFloat bool `json:"until_float"`
+		Duration   int  `json:"duration"` // giây, 0 = mặc định 60 của firmware, tối đa 300
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respond.BadRequest(c, "invalid body: target and state required")
@@ -78,9 +79,6 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		return
 	}
 
-	if req.Level < 0 || req.Level > 2 {
-		req.Level = 0
-	}
 	if req.Duration < 0 {
 		req.Duration = 0
 	}
@@ -88,7 +86,7 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		req.Duration = 300
 	}
 
-	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State, req.Level, req.Duration); err != nil {
+	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State, req.UntilFloat, req.Duration); err != nil {
 		respond.InternalError(c, err.Error())
 		return
 	}
@@ -104,13 +102,13 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		action = "inlet_on"
 	}
 	respond.OK(c, gin.H{
-		"message":  "Pump command sent",
-		"device":   deviceID,
-		"target":   target,
-		"state":    req.State,
-		"level":    req.Level,
-		"duration": req.Duration,
-		"action":   action,
+		"message":     "Pump command sent",
+		"device":      deviceID,
+		"target":      target,
+		"state":       req.State,
+		"until_float": req.UntilFloat,
+		"duration":    req.Duration,
+		"action":      action,
 	})
 }
 

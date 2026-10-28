@@ -53,6 +53,9 @@ function applyPumpFromEvent(payload, setInletOn, setDrainOn) {
     if (msg.includes('Bơm nạp: BẬT') || msg.includes('Bơm nạp đã bật')) setInletOn(true);
     if (
       stage === 'queue_cleared' ||
+      stage === 'stopped' ||
+      stage === 'filled' ||
+      stage === 'already_full' ||
       stage === 'manual_pump_timeout' ||
       msg.includes('Đã tắt bơm nạp') ||
       msg.includes('Tắt bơm') ||
@@ -71,6 +74,8 @@ function applyPumpFromEvent(payload, setInletOn, setDrainOn) {
     if (stage === 'draining' || msg.includes('Van xả: BẬT')) setDrainOn(true);
     if (
       stage === 'drained' ||
+      stage === 'already_empty' ||
+      stage === 'stopped' ||
       stage === 'queue_cleared' ||
       msg.includes('Đã tắt van xả') ||
       msg.includes('Đã xả 30s')
@@ -155,10 +160,10 @@ export default function App() {
         } else if (type === 'sampling_event') {
           if (isBoard(payload.device_id)) {
             setEvents((prev) => [payload, ...prev.slice(0, 29)]);
-            const jobStages = ['fill', 'drain_level', 'settle', 'warmup', 'measure', 'final_drain'];
-            if (payload.stage === 'fill' || payload.stage === 'drain_level' || payload.stage === 'settle') setPhase(0);
+            const jobStages = ['fill', 'warmup', 'measure', 'final_drain', 'drain_warning'];
+            if (payload.stage === 'fill') setPhase(0);
             else if (payload.stage === 'warmup' || payload.stage === 'measure') setPhase(1);
-            else if (payload.stage === 'final_drain') setPhase(2);
+            else if (payload.stage === 'final_drain' || payload.stage === 'drain_warning') setPhase(2);
             else if (payload.stage === 'job_done' || payload.stage === 'job_failed') {
               setPhase(-1);
               setCurrentState('IDLE');
@@ -203,11 +208,11 @@ export default function App() {
     }
   };
 
-  const handlePump = async (target, state, level = 0, duration = 0) => {
+  const handlePump = async (target, state, untilFloat = false, duration = 0) => {
     if (target === 'inlet') setInletOn(state);
     if (target === 'drain') setDrainOn(state);
     try {
-      const res = await api.setPump(WATER_ID, target, state, level, duration);
+      const res = await api.setPump(WATER_ID, target, state, untilFloat, duration);
       if (res?.error) throw new Error(res.error);
     } catch (e) {
       if (target === 'inlet') setInletOn(!state);
@@ -223,7 +228,7 @@ export default function App() {
       await api.clearQueue(WATER_ID);
     } catch (e) {
       console.error('Clear queue error:', e);
-      alert('Không thể gửi lệnh xóa queue: ' + e.message);
+      alert('Không thể gửi lệnh dừng bơm: ' + e.message);
     }
   };
 

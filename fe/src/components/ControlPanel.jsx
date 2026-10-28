@@ -9,15 +9,9 @@ export default function ControlPanel({
   drainOn = false,
 }) {
   const [selectedSensors, setSelectedSensors] = useState(['temp', 'ph']);
-  const [pumpLevel, setPumpLevel] = useState(0);
+  const [untilFloat, setUntilFloat] = useState(true);
   const [duration, setDuration] = useState(60);
   const [loading, setLoading] = useState(false);
-
-  const levelOptions = [
-    { id: 0, label: 'Không level' },
-    { id: 1, label: 'Phao 1' },
-    { id: 2, label: 'Phao 2' },
-  ];
 
   const clampDuration = (value) => {
     const n = Math.round(Number(value));
@@ -56,12 +50,12 @@ export default function ControlPanel({
 
   const toggleInlet = async () => {
     if (inletOn) await onPump('inlet', false);
-    else await onPump('inlet', true, pumpLevel, clampDuration(duration));
+    else await onPump('inlet', true, untilFloat, clampDuration(duration));
   };
 
   const toggleDrain = async () => {
     if (drainOn) await onPump('drain', false);
-    else await onPump('drain', true, pumpLevel, clampDuration(duration));
+    else await onPump('drain', true, untilFloat, clampDuration(duration));
   };
 
   const handleClearQueue = async () => {
@@ -135,7 +129,7 @@ export default function ControlPanel({
           onClick={handleClearQueue}
           disabled={loading}
         >
-          🗑 Xóa hết hàng đợi (clear_queue)
+          ⏹ Dừng cả hai bơm (stop)
         </button>
       </div>
 
@@ -149,25 +143,22 @@ export default function ControlPanel({
           marginBottom: '20px',
         }}
       >
-        Nút đo gửi lệnh thẳng tới sensor, không bơm hay xả. Nút bơm và xóa hàng đợi gửi một lệnh tới mạch water.
+        Nút đo không bơm hay xả. Nút bơm và nút dừng gửi một lệnh tới mạch water.
       </div>
 
       {/* Action 3: Manual Pump Controls */}
       <div>
         <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px' }}>
-          Điều khiển bơm / xả (MQTT queue):
+          Điều khiển bơm / xả:
         </div>
         <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
-          {levelOptions.map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              className={`toggle-pill ${pumpLevel === opt.id ? 'selected' : ''}`}
-              onClick={() => setPumpLevel(opt.id)}
-            >
-              {opt.label}
-            </button>
-          ))}
+          <button
+            type="button"
+            className={`toggle-pill ${untilFloat ? 'selected' : ''}`}
+            onClick={() => setUntilFloat(!untilFloat)}
+          >
+            Dừng theo phao: {untilFloat ? 'BẬT' : 'TẮT'}
+          </button>
         </div>
         <label
           style={{
@@ -192,7 +183,7 @@ export default function ControlPanel({
           />
         </label>
         <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px' }}>
-          Không level: chạy đủ thời gian. Bơm nạp có level: dừng khi phao đó đóng. Bơm xả có level: dừng khi phao đó tắt. Cái nào tới trước thì dừng.
+          Dừng theo phao: bơm nạp dừng khi phao đầy, bơm xả dừng khi phao tắt, hoặc hết thời gian, cái nào tới trước. Tắt: chạy đủ thời gian. Mạch không nhận lệnh bơm mới khi đang có bơm chạy.
         </div>
         <div className="btn-group" style={{ margin: 0 }}>
           <button
