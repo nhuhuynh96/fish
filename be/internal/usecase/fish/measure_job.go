@@ -14,6 +14,7 @@ import (
 const (
 	waterDeviceID         = "water"
 	sensorDeviceID        = "sensor"
+	phDeviceID            = "ph"
 	floatWaitLimit        = 30 * time.Second
 	waterWaitSlack        = 30 * time.Second
 	sensorWaitLimit       = 60 * time.Second
@@ -33,9 +34,9 @@ type sensorTiming struct {
 	IntervalMs int
 }
 
-// Mạch pH cần 10-30 giây sau khi cấp nguồn mới ổn định; đọc sau 1 giây mỗi lần lệch tới ±0,2 pH.
+// pH đọc qua Modbus trên bo ph, cảm biến cấp điện liên tục nên không cần làm ấm.
 var sensorTimings = map[string]sensorTiming{
-	"ph":   {Warmup: 30 * time.Second, Samples: 40, IntervalMs: 100},
+	"ph":   {Samples: 10, IntervalMs: 500},
 	"temp": {Warmup: 1 * time.Second},
 	"tds":  {Warmup: 5 * time.Second, Samples: 20, IntervalMs: 100},
 }
@@ -46,6 +47,7 @@ type waterSig struct {
 }
 
 type sensorSig struct {
+	Device  string
 	Stage   string
 	Names   []string
 	Sensor  string
@@ -113,9 +115,10 @@ func (s *Service) noteSensor(topicID, bodyID string, sig sensorSig) {
 	if id == "" {
 		id = topicID
 	}
-	if id != sensorDeviceID && topicID != sensorDeviceID {
+	if id != sensorDeviceID && id != phDeviceID {
 		return
 	}
+	sig.Device = id
 	s.jobMu.Lock()
 	ch := s.sensorWait
 	s.jobMu.Unlock()
@@ -147,10 +150,7 @@ func (s *Service) runMeasure(_ string, sensors []string) {
 	}
 	log.Printf("[MeasureJob] đo %v: bơm tới khi phao đầy, đo, rồi xả", want)
 
-	var measureErr error
-	if err := s.sensorPower(ctx, "all", false); err != nil {
-		measureErr = fmt.Errorf("tắt nguồn cảm biến: %w", err)
-	}
+	measureErr := s.resetSensorBoard(ctx, want)
 	var settle time.Duration
 	if measureErr == nil {
 		pumped, err := s.fillToFloat(ctx)
@@ -186,10 +186,7 @@ func (s *Service) runManualMeasure(sensors []string) {
 	want := normalizeSensors(sensors)
 	log.Printf("[MeasureJob] đo ngay %v, không chỉnh mực nước", want)
 
-	var measureErr error
-	if err := s.sensorPower(ctx, "all", false); err != nil {
-		measureErr = fmt.Errorf("tắt nguồn cảm biến: %w", err)
-	}
+	measureErr := s.resetSensorBoard(ctx, want)
 	for _, action := range want {
 		if measureErr != nil {
 			break
@@ -204,9 +201,20 @@ func (s *Service) runManualMeasure(sensors []string) {
 }
 
 // Bật nguồn, chờ đủ lâu hơn giữa thời gian làm ấm và thời gian nước ổn định, đọc, rồi luôn tắt nguồn.
+// pH đọc trên bo ph, không bật tắt nguồn.
 func (s *Service) measureSensor(ctx context.Context, action string, settle time.Duration) (err error) {
 	t := sensorTimings[action]
 	label := sensorLabel(action)
+	if action == "ph" {
+		if settle > 0 {
+			s.recordJob(ctx, sensorDeviceID, "warmup", fmt.Sprintf("Chờ %d giây cho nước ổn định rồi đo pH.", int(settle.Seconds())))
+			if err := sleepCtx(ctx, settle); err != nil {
+				return err
+			}
+		}
+		s.recordJob(ctx, sensorDeviceID, "measure", "Đo pH (RS485).")
+		return s.measureOne(ctx, action, t)
+	}
 	// Tắt cả khi lệnh bật lỗi: mất phản hồi không có nghĩa là mạch chưa bật.
 	defer func() {
 		if offErr := s.sensorPower(context.Background(), action, false); offErr != nil && err == nil {
@@ -236,6 +244,19 @@ func (s *Service) measureSensor(ctx context.Context, action string, settle time.
 	return s.measureOne(ctx, action, t)
 }
 
+// Tắt hết nguồn trên bo sensor trước lượt đo; lượt chỉ đo pH không cần bo sensor.
+func (s *Service) resetSensorBoard(ctx context.Context, want []string) error {
+	for _, action := range want {
+		if boardFor(action) == sensorDeviceID {
+			if err := s.sensorPower(ctx, "all", false); err != nil {
+				return fmt.Errorf("tắt nguồn cảm biến: %w", err)
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 // sensor "all" chỉ dùng để tắt.
 func (s *Service) sensorPower(ctx context.Context, sensor string, on bool) error {
 	ch := s.armSensor()
@@ -246,7 +267,7 @@ func (s *Service) sensorPower(ctx context.Context, sensor string, on bool) error
 	if err := s.pub.PublishSensorPower(ctx, sensorDeviceID, sensor, on, maxOnS); err != nil {
 		return err
 	}
-	_, err := waitSensor(ctx, ch, sensorPowerWaitLimit, func(sig sensorSig) bool {
+	_, err := waitSensor(ctx, ch, sensorDeviceID, sensorPowerWaitLimit, func(sig sensorSig) bool {
 		return sig.Stage == "power" && sig.Sensor == sensor && sig.Power == on
 	})
 	return err
@@ -352,16 +373,24 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
+func boardFor(action string) string {
+	if action == "ph" {
+		return phDeviceID
+	}
+	return sensorDeviceID
+}
+
 func (s *Service) measureOne(ctx context.Context, action string, t sensorTiming) error {
+	board := boardFor(action)
 	ch := s.armSensor()
-	if err := s.pub.PublishRead(ctx, sensorDeviceID, action, t.Samples, t.IntervalMs); err != nil {
+	if err := s.pub.PublishRead(ctx, board, action, t.Samples, t.IntervalMs); err != nil {
 		return err
 	}
 	want := action
 	if action == "temp" {
 		want = "temperature"
 	}
-	_, err := waitSensor(ctx, ch, sensorWaitLimit, func(sig sensorSig) bool {
+	_, err := waitSensor(ctx, ch, board, sensorWaitLimit, func(sig sensorSig) bool {
 		return sig.Stage == "data" && contains(sig.Names, want)
 	})
 	if err != nil {
@@ -390,12 +419,16 @@ func waitWater(ctx context.Context, ch <-chan waterSig, limit time.Duration, acc
 	}
 }
 
-func waitSensor(ctx context.Context, ch <-chan sensorSig, limit time.Duration, accept func(sensorSig) bool) (sensorSig, error) {
+// Chỉ xét tín hiệu từ đúng bo đang được hỏi.
+func waitSensor(ctx context.Context, ch <-chan sensorSig, device string, limit time.Duration, accept func(sensorSig) bool) (sensorSig, error) {
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	for {
 		select {
 		case sig := <-ch:
+			if sig.Device != device {
+				continue
+			}
 			if sig.Failed {
 				msg := sig.Message
 				if msg == "" {
@@ -407,7 +440,7 @@ func waitSensor(ctx context.Context, ch <-chan sensorSig, limit time.Duration, a
 				return sig, nil
 			}
 		case <-timer.C:
-			return sensorSig{}, fmt.Errorf("hết thời gian chờ sensor")
+			return sensorSig{}, fmt.Errorf("hết thời gian chờ bo %s", device)
 		case <-ctx.Done():
 			return sensorSig{}, ctx.Err()
 		}

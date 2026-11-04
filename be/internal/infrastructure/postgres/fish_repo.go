@@ -25,15 +25,15 @@ func (s *Store) SaveMeasurement(ctx context.Context, m *fish.Measurement) error 
 			id, device_id, timestamp, status, duration_ms, sensors,
 			temperature, ph, turbidity, tds,
 			ph_adc, ph_voltage, tds_adc, tds_voltage, turbidity_adc, turbidity_voltage,
-			created_at
+			created_at, ph_raw, ph_temp
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	`
 	_, err := s.db.ExecContext(ctx, query,
 		m.ID, m.DeviceID, m.Timestamp, m.Status, m.DurationMs,
 		pq.Array(m.Sensors), m.Temperature, m.PH, m.Turbidity, m.TDS,
 		m.PHAdc, m.PHVoltage, m.TDSAdc, m.TDSVoltage, m.TurbidityAdc, m.TurbidityVoltage,
-		m.CreatedAt,
+		m.CreatedAt, m.PHRaw, m.PHTemp,
 	)
 	if err != nil {
 		return fmt.Errorf("insert measurement: %w", err)
@@ -63,6 +63,12 @@ func (s *Store) GetLatestMeasurement(ctx context.Context, deviceID string) (*fis
 			merged.PH = m.PH
 			merged.PHAdc = m.PHAdc
 			merged.PHVoltage = m.PHVoltage
+		}
+		if m.PHRaw != nil && merged.PHRaw == nil {
+			merged.PHRaw = m.PHRaw
+		}
+		if m.PHTemp != nil && merged.PHTemp == nil {
+			merged.PHTemp = m.PHTemp
 		}
 		if m.TDS != nil && merged.TDS == nil {
 			merged.TDS = m.TDS
@@ -97,7 +103,7 @@ func (s *Store) ListMeasurements(ctx context.Context, deviceID string, limit int
 		SELECT id, device_id, timestamp, status, duration_ms, sensors,
 		       temperature, ph, turbidity, tds,
 		       ph_adc, ph_voltage, tds_adc, tds_voltage, turbidity_adc, turbidity_voltage,
-		       created_at
+		       created_at, ph_raw, ph_temp
 		FROM measurements
 		WHERE device_id = $1
 		ORDER BY created_at DESC
@@ -119,7 +125,7 @@ func (s *Store) ListMeasurementsSince(ctx context.Context, deviceID string, sinc
 		SELECT id, device_id, timestamp, status, duration_ms, sensors,
 		       temperature, ph, turbidity, tds,
 		       ph_adc, ph_voltage, tds_adc, tds_voltage, turbidity_adc, turbidity_voltage,
-		       created_at
+		       created_at, ph_raw, ph_temp
 		FROM measurements
 		WHERE device_id = $1 AND created_at >= $2
 		ORDER BY created_at DESC
@@ -142,7 +148,7 @@ func scanMeasurements(rows *sql.Rows) ([]fish.Measurement, error) {
 			&m.ID, &m.DeviceID, &m.Timestamp, &m.Status, &m.DurationMs,
 			pq.Array(&sensors), &m.Temperature, &m.PH, &m.Turbidity, &m.TDS,
 			&m.PHAdc, &m.PHVoltage, &m.TDSAdc, &m.TDSVoltage, &m.TurbidityAdc, &m.TurbidityVoltage,
-			&m.CreatedAt,
+			&m.CreatedAt, &m.PHRaw, &m.PHTemp,
 		); err != nil {
 			return nil, err
 		}
@@ -156,7 +162,8 @@ func (s *Store) GetCalibration(ctx context.Context, deviceID string) (*fish.Devi
 	query := `
 		SELECT device_id, ph_neutral_v, ph_slope, tds_temp_c,
 		       tds_ref_v, tds_ref_ppm, tds_max_ppm,
-		       turb_v_clear, turb_v_dirty, turb_ntu_max, updated_at
+		       turb_v_clear, turb_v_dirty, turb_ntu_max, updated_at,
+		       ph_gain, ph_offset
 		FROM device_calibration
 		WHERE device_id = $1
 	`
@@ -167,6 +174,7 @@ func (s *Store) GetCalibration(ctx context.Context, deviceID string) (*fish.Devi
 		&cal.DeviceID, &cal.PHNeutralV, &cal.PHSlope, &cal.TDSTempC,
 		&cal.TDSRefV, &cal.TDSRefPPM, &cal.TDSMaxPPM,
 		&cal.TurbVClear, &cal.TurbVDirty, &cal.TurbNTUMax, &cal.UpdatedAt,
+		&cal.PHGain, &cal.PHOffset,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -182,12 +190,15 @@ func (s *Store) SaveCalibration(ctx context.Context, cal *fish.DeviceCalibration
 		INSERT INTO device_calibration (
 			device_id, ph_neutral_v, ph_slope, tds_temp_c,
 			tds_ref_v, tds_ref_ppm, tds_max_ppm,
-			turb_v_clear, turb_v_dirty, turb_ntu_max, updated_at
+			turb_v_clear, turb_v_dirty, turb_ntu_max, updated_at,
+			ph_gain, ph_offset
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (device_id) DO UPDATE SET
 			ph_neutral_v = EXCLUDED.ph_neutral_v,
 			ph_slope = EXCLUDED.ph_slope,
+			ph_gain = EXCLUDED.ph_gain,
+			ph_offset = EXCLUDED.ph_offset,
 			tds_temp_c = EXCLUDED.tds_temp_c,
 			tds_ref_v = EXCLUDED.tds_ref_v,
 			tds_ref_ppm = EXCLUDED.tds_ref_ppm,
@@ -201,6 +212,7 @@ func (s *Store) SaveCalibration(ctx context.Context, cal *fish.DeviceCalibration
 		cal.DeviceID, cal.PHNeutralV, cal.PHSlope, cal.TDSTempC,
 		cal.TDSRefV, cal.TDSRefPPM, cal.TDSMaxPPM,
 		cal.TurbVClear, cal.TurbVDirty, cal.TurbNTUMax, cal.UpdatedAt,
+		cal.PHGain, cal.PHOffset,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert calibration: %w", err)

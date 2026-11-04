@@ -52,13 +52,13 @@ static bool parseState(JsonVariantConst v, bool &on) {
     return false;
 }
 
-// {"action":"power","sensor":"ph"|"temp"|"tds"|"all","state":true|false,"max_on_s":300}
+// {"action":"power","sensor":"temp"|"tds"|"all","state":true|false,"max_on_s":300}
 // {"action":"power_status"}
-// {"action":"ph"|"temp"|"tds"|"measure_all","samples":40,"interval_ms":100}
+// {"action":"temp"|"tds"|"measure_all","samples":20,"interval_ms":100}
 void handleMqttCommand(const String &msg) {
     JsonDocument doc;
     if (deserializeJson(doc, msg)) {
-        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"ph\"}");
+        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"temp\"}");
         return;
     }
 
@@ -77,7 +77,7 @@ void handleMqttCommand(const String &msg) {
         sensor.trim();
         bool on = false;
         if (sensor.length() == 0 || !parseState(doc["state"], on)) {
-            publishCommandError("Lệnh power cần sensor và state. Ví dụ: {\"action\":\"power\",\"sensor\":\"ph\",\"state\":true}");
+            publishCommandError("Lệnh power cần sensor và state. Ví dụ: {\"action\":\"power\",\"sensor\":\"tds\",\"state\":true}");
             return;
         }
         int maxOnS = doc["max_on_s"] | 0;

@@ -162,6 +162,7 @@ func (s *Service) HandleSensorData(ctx context.Context, deviceID string, payload
 			PH        *rawReading `json:"ph"`
 			TDS       *rawReading `json:"tds"`
 			Turbidity *rawReading `json:"turbidity"`
+			TempC     *float64    `json:"temp_c"` // nhiệt độ trong cảm biến pH RS485
 		} `json:"raw"`
 		Data struct {
 			Temperature *float64 `json:"temperature"`
@@ -202,6 +203,19 @@ func (s *Service) HandleSensorData(ctx context.Context, deviceID string, payload
 		m.PH = body.Data.PH
 		m.Turbidity = body.Data.Turbidity
 		m.TDS = body.Data.TDS
+	}
+	if body.DeviceID == phDeviceID && m.PH != nil {
+		cal, err := s.getCalibration(ctx, phDeviceID)
+		if err != nil {
+			return err
+		}
+		raw := *m.PH
+		ph := calibrate.CorrectPH(raw, cal.PHGain, cal.PHOffset)
+		m.PHRaw = &raw
+		m.PH = &ph
+	}
+	if body.DeviceID == phDeviceID {
+		m.PHTemp = body.Raw.TempC
 	}
 
 	if err := s.repo.SaveMeasurement(ctx, m); err != nil {
@@ -482,7 +496,13 @@ func (s *Service) GetAdvice(ctx context.Context, deviceID string, profile advice
 		return nil, advice.ErrLLMNotConfigured
 	}
 	since := time.Now().Add(-7 * 24 * time.Hour)
-	history, err := s.repo.ListMeasurementsSince(ctx, deviceID, since, 4000)
+	var history []fish.Measurement
+	var err error
+	if isPondDevice(deviceID) {
+		history, err = s.listPondSince(ctx, since, 4000)
+	} else {
+		history, err = s.repo.ListMeasurementsSince(ctx, deviceID, since, 4000)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -546,9 +566,19 @@ func (s *Service) SaveKitReading(ctx context.Context, r *fish.KitReading) (*fish
 			return nil, fmt.Errorf("%s phải từ 0–%g", c.name, c.max)
 		}
 	}
-	if latest, err := s.repo.GetLatestMeasurement(ctx, r.DeviceID); err == nil && latest != nil {
+	var latest *fish.Measurement
+	var latestErr error
+	if isPondDevice(r.DeviceID) {
+		latest, latestErr = s.GetPondLatest(ctx)
+	} else {
+		latest, latestErr = s.repo.GetLatestMeasurement(ctx, r.DeviceID)
+	}
+	if latestErr == nil && latest != nil {
 		r.PHUsed = latest.PH
 		r.TempUsed = latest.Temperature
+		if latest.WaterTemp != nil {
+			r.TempUsed = latest.WaterTemp
+		}
 	}
 	tempC := 25.0
 	if r.TempUsed != nil {

@@ -17,13 +17,19 @@ import DeviceLogStream from './components/DeviceLogStream';
 const HISTORY_LIMIT = 100;
 const SENSOR_ID = 'sensor';
 const WATER_ID = 'water';
+const PH_ID = 'ph';
 
 function isBoard(id) {
-  return id === SENSOR_ID || id === WATER_ID;
+  return id === SENSOR_ID || id === WATER_ID || id === PH_ID;
 }
 
-function mergeEvents(sensorEvents, waterEvents) {
-  return [...(sensorEvents || []), ...(waterEvents || [])]
+function isPondData(id) {
+  return id === SENSOR_ID || id === PH_ID;
+}
+
+function mergeEvents(...lists) {
+  return lists
+    .flatMap((l) => l || [])
     .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
     .slice(0, 25);
 }
@@ -33,8 +39,8 @@ function mergeMeasurement(prev, incoming) {
   if (!incoming) return prev;
   const merged = { ...prev, ...incoming };
   const fields = [
-    'temperature', 'ph', 'tds',
-    'ph_adc', 'ph_voltage', 'tds_adc', 'tds_voltage',
+    'temperature', 'ph', 'tds', 'ph_temp', 'water_temp', 'temp_source',
+    'ph_raw', 'ph_adc', 'ph_voltage', 'tds_adc', 'tds_voltage',
   ];
   for (const f of fields) {
     if (incoming[f] === undefined || incoming[f] === null) {
@@ -42,6 +48,16 @@ function mergeMeasurement(prev, incoming) {
     }
   }
   return merged;
+}
+
+// Cùng quy tắc với backend: có nhiệt độ cảm biến pH thì DS18B20 không vào nhiệt độ nước.
+function withWaterTemp(payload, phTempSeen) {
+  if (payload.device_id === PH_ID) {
+    if (payload.ph_temp == null) return { ...payload, water_temp: null };
+    return { ...payload, water_temp: payload.ph_temp, temp_source: 'ph' };
+  }
+  if (phTempSeen || payload.temperature == null) return { ...payload, water_temp: null };
+  return { ...payload, water_temp: payload.temperature, temp_source: 'ds18b20' };
 }
 
 function applyPumpFromEvent(payload, setInletOn, setDrainOn) {
@@ -96,6 +112,7 @@ export default function App() {
   const [currentState, setCurrentState] = useState('IDLE');
   const [jobPhase, setJobPhase] = useState(-1);
   const jobPhaseRef = useRef(-1);
+  const phTempSeenRef = useRef(false);
   const setPhase = (phase) => {
     jobPhaseRef.current = phase;
     setJobPhase(phase);
@@ -109,17 +126,19 @@ export default function App() {
       const devs = await api.getDevices();
       setDevices(devs);
 
-      const latest = await api.getLatest(SENSOR_ID);
+      const latest = await api.getPondLatest();
       if (latest) setLatestMeasurement(latest);
 
-      const hist = await api.getHistory(SENSOR_ID, HISTORY_LIMIT);
+      const hist = await api.getPondHistory(HISTORY_LIMIT);
       setHistory(hist);
+      phTempSeenRef.current = latest?.temp_source === 'ph' || hist.some((m) => m.ph_temp != null);
 
-      const [sensorEvents, waterEvents] = await Promise.all([
+      const [sensorEvents, waterEvents, phEvents] = await Promise.all([
         api.getEvents(SENSOR_ID, 25),
         api.getEvents(WATER_ID, 25),
+        api.getEvents(PH_ID, 25),
       ]);
-      const merged = mergeEvents(sensorEvents, waterEvents);
+      const merged = mergeEvents(sensorEvents, waterEvents, phEvents);
       setEvents(merged);
 
       let inlet = false;
@@ -153,9 +172,11 @@ export default function App() {
         const { type, payload } = msg;
 
         if (type === 'sensor_data') {
-          if (payload.device_id === SENSOR_ID) {
-            setLatestMeasurement((prev) => mergeMeasurement(prev, payload));
-            setHistory((prev) => [payload, ...prev.slice(0, HISTORY_LIMIT - 1)]);
+          if (isPondData(payload.device_id)) {
+            if (payload.device_id === PH_ID && payload.ph_temp != null) phTempSeenRef.current = true;
+            const row = withWaterTemp(payload, phTempSeenRef.current);
+            setLatestMeasurement((prev) => mergeMeasurement(prev, row));
+            setHistory((prev) => [row, ...prev.slice(0, HISTORY_LIMIT - 1)]);
           }
         } else if (type === 'sampling_event') {
           if (isBoard(payload.device_id)) {
@@ -252,12 +273,14 @@ export default function App() {
 
   const sensorOnline = devices.find((d) => d.id === SENSOR_ID)?.online ?? false;
   const waterOnline = devices.find((d) => d.id === WATER_ID)?.online ?? false;
+  const phOnline = devices.find((d) => d.id === PH_ID)?.online ?? false;
 
   return (
     <div className="app-container">
       <Header
         sensorOnline={sensorOnline}
         waterOnline={waterOnline}
+        phOnline={phOnline}
         wsConnected={wsConnected}
         currentState={currentState}
       />

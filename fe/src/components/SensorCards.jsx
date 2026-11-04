@@ -1,4 +1,5 @@
 import React from 'react';
+import { waterTemp, tempSourceLabel } from '../utils/temperature';
 
 const EEL_FALLBACK = {
   thresholds: {
@@ -21,7 +22,8 @@ export default function SensorCards({ measurement, pondConfig }) {
   const th = pondConfig?.thresholds || EEL_FALLBACK.thresholds;
   const badges = pondConfig?.badges || EEL_FALLBACK.badges;
 
-  const temp = measurement?.temperature;
+  const temp = waterTemp(measurement);
+  const tempSource = tempSourceLabel(measurement?.temp_source);
   const ph = measurement?.ph;
   const tds = measurement?.tds;
 
@@ -48,7 +50,7 @@ export default function SensorCards({ measurement, pondConfig }) {
 
   const cards = [
     {
-      title: 'Nhiệt Độ Nước',
+      title: tempSource ? `Nhiệt Độ Nước (${tempSource})` : 'Nhiệt Độ Nước',
       value: temp !== undefined && temp !== null ? temp.toFixed(1) : '--',
       unit: '°C',
       status: getTempStatus(temp),

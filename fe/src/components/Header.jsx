@@ -14,6 +14,7 @@ function BoardStatus({ label, online, measuring }) {
 export default function Header({
   sensorOnline,
   waterOnline,
+  phOnline,
   wsConnected,
   currentState,
 }) {
@@ -35,6 +36,7 @@ export default function Header({
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
         <BoardStatus label="Sensor" online={sensorOnline} measuring={isMeasuring} />
+        <BoardStatus label="pH" online={phOnline} />
         <BoardStatus label="Water" online={waterOnline} />
 
         {/* WS Connection Indicator */}

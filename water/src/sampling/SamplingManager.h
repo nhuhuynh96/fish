@@ -42,8 +42,9 @@ private:
     const uint8_t INLET_PUMP_PIN = 18;
     const uint8_t DRAIN_PUMP_PIN = 19;
     const uint8_t FLOAT_PIN = 17;
-    const uint8_t PUMP_ON_LEVEL = LOW;
-    const uint8_t PUMP_OFF_LEVEL = HIGH;
+    // Module relay 2 kênh có opto, kích mức cao.
+    const uint8_t PUMP_ON_LEVEL = HIGH;
+    const uint8_t PUMP_OFF_LEVEL = LOW;
     const uint8_t FLOAT_ACTIVE = LOW;
 
     bool readFloatRaw() const;

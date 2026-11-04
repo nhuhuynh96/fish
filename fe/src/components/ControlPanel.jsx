@@ -88,7 +88,7 @@ export default function ControlPanel({
           🚀 Đo Toàn Bộ Chỉ Số (pH + nhiệt độ + TDS)
         </button>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
-          Không chỉnh mực nước. Backend bật nguồn từng sensor, chờ (pH 30 giây), đọc rồi tắt; kết quả về sau khoảng 45 giây.
+          Không chỉnh mực nước. pH đọc trên bo RS485 (khoảng 5 giây); nhiệt độ và TDS bật nguồn, chờ, đọc rồi tắt. Kết quả đủ sau khoảng 20 giây.
         </div>
       </div>
 

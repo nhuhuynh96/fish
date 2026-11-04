@@ -1,6 +1,6 @@
 # Sơ đồ đấu nối bơm nạp, bơm xả, phao (ESP32)
 
-Khớp firmware `water`. GPIO 18 và GPIO 19 điều khiển relay kích mức thấp: chân ở mức LOW thì relay đóng, bơm chạy. Firmware không bao giờ bật bơm nạp và bơm xả cùng lúc.
+Khớp firmware `water`. GPIO 18 và GPIO 19 điều khiển relay kích mức cao: chân ở mức HIGH thì relay đóng, bơm chạy. Lúc ESP32 khởi động hoặc reset, chân ở mức thấp nên bơm tắt. Firmware không bao giờ bật bơm nạp và bơm xả cùng lúc.
 
 ## Nguồn
 
@@ -20,7 +20,9 @@ Tụ 1000 µF có cực: chân (−), phía có vạch, nối GND. Tụ 100 nF (
 
 Dùng module relay có optocoupler thì GND nguồn bơm không cần nối với GND ESP32. Dùng module relay không có optocoupler thì nối hai GND tại một điểm duy nhất, ngay chỗ module relay.
 
-## Module relay 2 kênh (kích mức thấp, có optocoupler)
+## Module relay 2 kênh (kích mức cao, có optocoupler)
+
+Module có jumper H/L thì đặt ở H. Đổi sang module kích mức thấp thì đảo `PUMP_ON_LEVEL` / `PUMP_OFF_LEVEL` trong `SamplingManager.h`.
 
 ```
 ESP32 3V3 ──── VCC   (phía tín hiệu, cấp cho LED optocoupler)
@@ -32,9 +34,7 @@ Nguồn 5 V (+) ── JD-VCC   (cuộn relay, bỏ jumper JD-VCC ↔ VCC)
 Nguồn 5 V (−) ── GND phía JD-VCC
 ```
 
-VCC phía tín hiệu phải là 3,3 V, không phải 5 V. Cấp 5 V vào VCC thì khi GPIO lên mức cao 3,3 V, LED optocoupler vẫn còn chênh khoảng 1,7 V, relay có thể không nhả và bơm chạy mãi.
-
-Module không có jumper JD-VCC: cấp VCC 5 V, rồi đo thử. GPIO lên cao mà relay không nhả thì đổi module hoặc thêm transistor đệm.
+Module không có jumper JD-VCC: cấp VCC 5 V, rồi đo thử. GPIO lên cao (3,3 V) mà relay không đóng thì đổi module hoặc thêm transistor đệm.
 
 ## Bơm nạp và bơm xả
 
@@ -84,8 +84,8 @@ Phao loại hai trạng thái thường mở hoặc thường đóng tùy chiề
 
 | Chân | Việc |
 |---|---|
-| GPIO 18 | IN1 relay bơm nạp, LOW = bật |
-| GPIO 19 | IN2 relay bơm xả, LOW = bật |
+| GPIO 18 | IN1 relay bơm nạp, HIGH = bật |
+| GPIO 19 | IN2 relay bơm xả, HIGH = bật |
 | GPIO 17 | Phao (mực đầy), LOW = có nước |
 | GPIO 0 | Nút BOOT, giữ 3 giây để mở AP cấu hình |
 

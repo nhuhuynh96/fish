@@ -22,44 +22,32 @@ void SensorManager::begin() {
     }
 
     analogReadResolution(12);
-    analogSetPinAttenuation(PH_ADC_PIN, ADC_11db);
     analogSetPinAttenuation(TDS_ADC_PIN, ADC_11db);
 
     oneWire.begin(TEMP_DATA_PIN);
     tempSensor.setWaitForConversion(false);
 
-    LOGLN("[Sensor] DS18B20 GPIO4/5 | pH GPIO6/7 | TDS GPIO8/9. Nguồn tắt, chờ lệnh power.");
+    LOGLN("[Sensor] DS18B20 GPIO4/5 | TDS GPIO8/9. Nguồn tắt, chờ lệnh power.");
 }
+
+static const char *PH_MOVED = "pH đã chuyển sang bo sensor-ph (device ph).";
 
 int SensorManager::sensorIndex(const String &name) {
     if (name == "temp" || name == "temperature") return TEMP;
-    if (name == "ph") return PH;
     if (name == "tds") return TDS;
     return -1;
 }
 
 uint8_t SensorManager::powerPin(int idx) {
-    switch (idx) {
-    case TEMP: return TEMP_POWER_PIN;
-    case PH: return PH_POWER_PIN;
-    default: return TDS_POWER_PIN;
-    }
+    return idx == TEMP ? TEMP_POWER_PIN : TDS_POWER_PIN;
 }
 
 const char *SensorManager::sensorKey(int idx) {
-    switch (idx) {
-    case TEMP: return "temp";
-    case PH: return "ph";
-    default: return "tds";
-    }
+    return idx == TEMP ? "temp" : "tds";
 }
 
 const char *SensorManager::sensorLabel(int idx) {
-    switch (idx) {
-    case TEMP: return "nhiệt độ";
-    case PH: return "pH";
-    default: return "TDS";
-    }
+    return idx == TEMP ? "nhiệt độ" : "TDS";
 }
 
 void SensorManager::request(const String &action, int samples, int intervalMs) {
@@ -104,18 +92,13 @@ void SensorManager::setPower(const String &sensor, bool on, uint32_t maxOnS) {
         return;
     }
 
+    if (sensor == "ph") {
+        publishEvent("command_error", PH_MOVED);
+        return;
+    }
     int idx = sensorIndex(sensor);
     if (idx < 0) {
         publishEvent("command_error", "Sensor không hỗ trợ: " + sensor);
-        return;
-    }
-    // pH và TDS cùng có điện trong một khối nước sẽ đẩy dòng qua nước, làm lệch pH và mòn điện cực.
-    if (on && idx == PH && powered[TDS]) {
-        publishEvent("command_error", "TDS đang bật. Tắt TDS trước khi bật pH.");
-        return;
-    }
-    if (on && idx == TDS && powered[PH]) {
-        publishEvent("command_error", "pH đang bật. Tắt pH trước khi bật TDS.");
         return;
     }
 
@@ -281,24 +264,26 @@ static int clampInt(int value, int fallback, int lo, int hi) {
 
 void SensorManager::run(const String &action, int samples, int intervalMs) {
     bool wantTemp = action == "temp" || action == "temperature" || action == "test_temp" || action == "test_temperature";
-    bool wantPh = action == "ph" || action == "test_ph";
     bool wantTds = action == "tds" || action == "test_tds";
     bool wantAll = action == "measure_all" || action == "measure" || action == "test" || action == "all";
 
-    if (!wantTemp && !wantPh && !wantTds && !wantAll) {
+    if (action == "ph" || action == "test_ph") {
+        publishEvent("command_error", PH_MOVED);
+        return;
+    }
+    if (!wantTemp && !wantTds && !wantAll) {
         publishEvent("command_error", "Action không được hỗ trợ: " + action);
         return;
     }
     if (wantAll) {
         wantTemp = powered[TEMP];
-        wantPh = powered[PH];
         wantTds = powered[TDS];
-        if (!wantTemp && !wantPh && !wantTds) {
+        if (!wantTemp && !wantTds) {
             publishEvent("sensor_error", "Chưa bật nguồn cảm biến nào, gửi lệnh power trước.");
             return;
         }
     } else {
-        int idx = wantTemp ? TEMP : (wantPh ? PH : TDS);
+        int idx = wantTemp ? TEMP : TDS;
         if (!powered[idx]) {
             publishEvent("sensor_error", String(sensorLabel(idx)) + " chưa bật nguồn, gửi lệnh power trước.");
             return;
@@ -323,18 +308,7 @@ void SensorManager::run(const String &action, int samples, int intervalMs) {
             LOGF("[Sensor] Nhiệt độ %.2f C\n", celsius);
         } else {
             publishEvent("sensor_error", "Lỗi đo nhiệt độ: không đọc được DS18B20");
-            if (!wantPh && !wantTds) return;
-        }
-    }
-
-    if (wantPh) {
-        int n = clampInt(samples, PH_SAMPLES, 1, MAX_SAMPLES);
-        int adc = 0;
-        float voltage = 0;
-        if (readAnalog("pH", PH_ADC_PIN, n, interval, adc, voltage)) {
-            addAnalog(doc, "ph", adc, voltage, n);
-            any = true;
-            LOGF("[Sensor] pH ADC=%d V=%.3f\n", adc, voltage);
+            if (!wantTds) return;
         }
     }
 

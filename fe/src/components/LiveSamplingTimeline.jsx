@@ -23,7 +23,7 @@ export default function LiveSamplingTimeline({ jobPhase, latestEvent }) {
         Tiến Trình Đo Cảm Biến
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-        Lịch đo tự động: bơm tới khi phao đầy, chờ nước ổn định 45 giây, đo pH, nhiệt độ, TDS trong cùng một lần đầy bình. Mỗi sensor bật nguồn, chờ (pH 30 giây), đọc rồi tắt; pH và TDS không bật cùng lúc. Đo xong xả tới khi phao tắt rồi xả thêm 20 giây.
+        Lịch đo tự động: bơm tới khi phao đầy, chờ nước ổn định 45 giây, đo pH (bo RS485, cấp điện liên tục), rồi nhiệt độ và TDS trong cùng một lần đầy bình; nhiệt độ và TDS bật nguồn, chờ, đọc rồi tắt. Đo xong xả tới khi phao tắt rồi xả thêm 20 giây.
       </p>
 
       <div className="timeline-stepper">

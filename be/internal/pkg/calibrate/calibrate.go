@@ -11,6 +11,14 @@ func CalcPH(voltage, neutralV, slope float64) float64 {
 	return clamp(ph, 0, 14)
 }
 
+// CorrectPH applies linear calibration to a pH reported by a digital probe. gain 0 means 1.
+func CorrectPH(raw, gain, offset float64) float64 {
+	if gain == 0 {
+		gain = 1
+	}
+	return clamp(gain*raw+offset, 0, 14)
+}
+
 // CalcTDS converts probe voltage to ppm using DFRobot-style polynomial with temp compensation.
 // Optional single-point scale: when refV > 0 and refPPM > 0, result is scaled so that
 // voltage=refV maps to refPPM (after temperature compensation).

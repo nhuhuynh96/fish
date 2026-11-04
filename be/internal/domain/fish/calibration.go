@@ -9,6 +9,8 @@ type DeviceCalibration struct {
 	DeviceID   string    `json:"device_id"`
 	PHNeutralV float64   `json:"ph_neutral_v"`
 	PHSlope    float64   `json:"ph_slope"`
+	PHGain     float64   `json:"ph_gain"` // pH RS485: ph = ph_gain * ph_raw + ph_offset
+	PHOffset   float64   `json:"ph_offset"`
 	TDSTempC   float64   `json:"tds_temp_c"`
 	TDSRefV    float64   `json:"tds_ref_v"`   // điện áp đo được trong chuẩn TDS
 	TDSRefPPM  float64   `json:"tds_ref_ppm"` // ppm ghi trên chai chuẩn (0 = tắt scale)
@@ -24,6 +26,8 @@ func DefaultCalibration(deviceID string) *DeviceCalibration {
 		DeviceID:   deviceID,
 		PHNeutralV: 2.50,
 		PHSlope:    0.18,
+		PHGain:     1,
+		PHOffset:   0,
 		TDSTempC:   25.0,
 		TDSRefV:    0,
 		TDSRefPPM:  0,

@@ -256,6 +256,27 @@ func (h *FishHandler) ListHistory(c *gin.Context) {
 	respond.OK(c, list)
 }
 
+// 4b. Số đo mới nhất của hồ, gộp bo sensor (nhiệt độ, TDS) và bo ph
+func (h *FishHandler) GetPondLatest(c *gin.Context) {
+	data, err := h.svc.GetPondLatest(c.Request.Context())
+	if err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+	respond.OK(c, data)
+}
+
+// 4c. Lịch sử đo của hồ, gộp mọi bo, mới nhất trước
+func (h *FishHandler) GetPondHistory(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	list, err := h.svc.ListPondHistory(c.Request.Context(), limit)
+	if err != nil {
+		respond.InternalError(c, err.Error())
+		return
+	}
+	respond.OK(c, list)
+}
+
 // 5. Lấy danh sách sự kiện tiến trình
 func (h *FishHandler) ListEvents(c *gin.Context) {
 	deviceID := c.Param("id")
@@ -287,6 +308,8 @@ func (h *FishHandler) UpdateCalibration(c *gin.Context) {
 	var req struct {
 		PHNeutralV *float64 `json:"ph_neutral_v"`
 		PHSlope    *float64 `json:"ph_slope"`
+		PHGain     *float64 `json:"ph_gain"`
+		PHOffset   *float64 `json:"ph_offset"`
 		TDSTempC   *float64 `json:"tds_temp_c"`
 		TDSRefV    *float64 `json:"tds_ref_v"`
 		TDSRefPPM  *float64 `json:"tds_ref_ppm"`
@@ -310,6 +333,12 @@ func (h *FishHandler) UpdateCalibration(c *gin.Context) {
 	}
 	if req.PHSlope != nil && *req.PHSlope > 0 {
 		cal.PHSlope = *req.PHSlope
+	}
+	if req.PHGain != nil && *req.PHGain > 0.5 && *req.PHGain < 2 {
+		cal.PHGain = *req.PHGain
+	}
+	if req.PHOffset != nil && *req.PHOffset > -3 && *req.PHOffset < 3 {
+		cal.PHOffset = *req.PHOffset
 	}
 	if req.TDSTempC != nil && *req.TDSTempC > 0 {
 		cal.TDSTempC = *req.TDSTempC

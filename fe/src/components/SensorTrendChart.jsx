@@ -8,6 +8,7 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+import { waterTemp } from '../utils/temperature';
 
 const SERIES = [
   { key: 'ph', name: 'pH', color: '#34d399', unit: '', domain: [0, 14], digits: 2 },
@@ -33,9 +34,10 @@ function buildChartRows(history) {
     const t = m.created_at || null;
     if (m.ph != null) last.ph = m.ph;
     if (m.tds != null) last.tds = m.tds;
-    if (m.temperature != null) last.temperature = m.temperature;
+    const temp = waterTemp(m);
+    if (temp != null) last.temperature = temp;
 
-    const hasAny = m.ph != null || m.tds != null || m.temperature != null;
+    const hasAny = m.ph != null || m.tds != null || temp != null;
     if (!hasAny) continue;
 
     rows.push({

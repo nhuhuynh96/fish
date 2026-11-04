@@ -94,6 +94,12 @@ func (s *Store) GetLatestMeasurement(ctx context.Context, deviceID string) (*fis
 			merged.PHAdc = m.PHAdc
 			merged.PHVoltage = m.PHVoltage
 		}
+		if m.PHRaw != nil && merged.PHRaw == nil {
+			merged.PHRaw = m.PHRaw
+		}
+		if m.PHTemp != nil && merged.PHTemp == nil {
+			merged.PHTemp = m.PHTemp
+		}
 		if m.TDS != nil && merged.TDS == nil {
 			merged.TDS = m.TDS
 			merged.TDSAdc = m.TDSAdc

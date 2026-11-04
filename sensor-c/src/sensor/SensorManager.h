@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 
-// Đo pH, nhiệt độ DS18B20 và TDS. Nguồn từng cảm biến do lệnh MQTT "power" bật tắt;
+// Đo nhiệt độ DS18B20 và TDS; pH đã chuyển sang bo sensor-ph. Nguồn từng cảm biến do lệnh MQTT "power" bật tắt;
 // lệnh đọc chỉ đọc, không đụng tới nguồn.
 class SensorManager {
 public:
@@ -20,16 +20,13 @@ public:
     static const uint32_t MAX_MAX_ON_S = 1800;
 
 private:
-    enum { TEMP = 0, PH = 1, TDS = 2, COUNT = 3 };
+    enum { TEMP = 0, TDS = 1, COUNT = 2 };
 
     static const uint8_t TEMP_DATA_PIN = 4;
     static const uint8_t TEMP_POWER_PIN = 5;
-    static const uint8_t PH_ADC_PIN = 6;
-    static const uint8_t PH_POWER_PIN = 7;
     static const uint8_t TDS_ADC_PIN = 8;
     static const uint8_t TDS_POWER_PIN = 9;
 
-    static const int PH_SAMPLES = 40;
     static const int TDS_SAMPLES = 20;
     static const int MAX_SAMPLES = 100;
     static const int DEFAULT_INTERVAL_MS = 100;
@@ -44,9 +41,9 @@ private:
     int pendingSamples = 0;
     int pendingIntervalMs = 0;
 
-    bool powered[COUNT] = {false, false, false};
-    uint32_t onSince[COUNT] = {0, 0, 0};
-    uint32_t maxOnMs[COUNT] = {0, 0, 0};
+    bool powered[COUNT] = {false, false};
+    uint32_t onSince[COUNT] = {0, 0};
+    uint32_t maxOnMs[COUNT] = {0, 0};
     bool mqttWasConnected = false;
 
     void run(const String &action, int samples, int intervalMs);

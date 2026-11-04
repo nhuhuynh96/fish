@@ -55,6 +55,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 			devices.POST("/:id/kit-readings", fishHandler.SaveKitReading)
 			devices.GET("/:id/kit-readings", fishHandler.ListKitReadings)
 		}
+		api.GET("/pond/latest", fishHandler.GetPondLatest)
+		api.GET("/pond/history", fishHandler.GetPondHistory)
 		api.GET("/pond-config", fishHandler.GetPondConfig)
 		api.PUT("/pond-config", fishHandler.UpdatePondConfig)
 	}

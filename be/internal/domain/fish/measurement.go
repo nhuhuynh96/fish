@@ -6,16 +6,21 @@ import (
 )
 
 type Measurement struct {
-	ID               string    `json:"id"`
-	DeviceID         string    `json:"device_id"`
-	Timestamp        int64     `json:"timestamp"`
-	Status           string    `json:"status"`
-	DurationMs       int64     `json:"duration_ms"`
-	Sensors          []string  `json:"sensors_measured"`
-	Temperature      *float64  `json:"temperature,omitempty"`
-	PH               *float64  `json:"ph,omitempty"`
-	Turbidity        *float64  `json:"turbidity,omitempty"`
-	TDS              *float64  `json:"tds,omitempty"`
+	ID          string   `json:"id"`
+	DeviceID    string   `json:"device_id"`
+	Timestamp   int64    `json:"timestamp"`
+	Status      string   `json:"status"`
+	DurationMs  int64    `json:"duration_ms"`
+	Sensors     []string `json:"sensors_measured"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	PH          *float64 `json:"ph,omitempty"`
+	Turbidity   *float64 `json:"turbidity,omitempty"`
+	TDS         *float64 `json:"tds,omitempty"`
+	PHRaw       *float64 `json:"ph_raw,omitempty"`  // pH cảm biến RS485 trả về, trước hiệu chỉnh
+	PHTemp      *float64 `json:"ph_temp,omitempty"` // nhiệt độ đo trong cảm biến pH RS485; Temperature là DS18B20
+	// Nhiệt độ nước dùng để hiển thị và phân tích: ưu tiên PHTemp, thiếu mới dùng DS18B20. Không lưu DB.
+	WaterTemp        *float64  `json:"water_temp"`
+	TempSource       string    `json:"temp_source,omitempty"` // "ph" hoặc "ds18b20"
 	PHAdc            *int      `json:"ph_adc,omitempty"`
 	PHVoltage        *float64  `json:"ph_voltage,omitempty"`
 	TDSAdc           *int      `json:"tds_adc,omitempty"`

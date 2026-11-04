@@ -23,6 +23,19 @@ export const api = {
     return json.data || [];
   },
 
+  // Gộp bo sensor (nhiệt độ, TDS) và bo ph.
+  async getPondLatest() {
+    const res = await fetch(`${API_BASE}/pond/latest`);
+    const json = await res.json();
+    return json.data || null;
+  },
+
+  async getPondHistory(limit = 15) {
+    const res = await fetch(`${API_BASE}/pond/history?limit=${limit}`);
+    const json = await res.json();
+    return json.data || [];
+  },
+
   async getEvents(deviceId, limit = 20) {
     if (!deviceId) return [];
     const res = await fetch(`${API_BASE}/devices/${deviceId}/events?limit=${limit}`);

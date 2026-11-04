@@ -16,6 +16,7 @@ type scriptWater struct {
 	full        bool
 	cmds        []string
 	rejectPower string
+	phError     bool
 	fillTimeout bool
 	stuckFloat  bool
 }
@@ -77,13 +78,17 @@ func (w *scriptWater) PublishSensorPower(_ context.Context, _ string, sensor str
 	return nil
 }
 
-func (w *scriptWater) PublishRead(_ context.Context, _ string, sensor string, _, _ int) error {
-	w.cmds = append(w.cmds, "measure:"+sensor)
+func (w *scriptWater) PublishRead(_ context.Context, deviceID string, sensor string, _, _ int) error {
+	w.cmds = append(w.cmds, "measure:"+sensor+"@"+deviceID)
+	if deviceID == phDeviceID && w.phError {
+		w.svc.noteSensorEvent(phDeviceID, phDeviceID, "sensor_error", "", false, "Modbus không trả lời")
+		return nil
+	}
 	name := sensor
 	if name == "temp" {
 		name = "temperature"
 	}
-	w.svc.noteSensor(sensorDeviceID, sensorDeviceID, sensorSig{Stage: "data", Names: []string{name}})
+	w.svc.noteSensor(deviceID, deviceID, sensorSig{Stage: "data", Names: []string{name}})
 	return nil
 }
 
@@ -141,9 +146,9 @@ func countStage(stages []string, stage string) int {
 }
 
 var allSensorsCmds = []string{
-	"power:ph:on", "measure:ph", "power:ph:off",
-	"power:temp:on", "measure:temp", "power:temp:off",
-	"power:tds:on", "measure:tds", "power:tds:off",
+	"measure:ph@ph",
+	"power:temp:on", "measure:temp@sensor", "power:temp:off",
+	"power:tds:on", "measure:tds@sensor", "power:tds:off",
 }
 
 func TestRunMeasure_EmptyBinFillsOnceMeasuresAllThenDrains(t *testing.T) {
@@ -179,7 +184,7 @@ func TestRunMeasure_FillTimeoutStillDrainsAndFails(t *testing.T) {
 	water.fillTimeout = true
 	water.svc.runMeasure("pond", []string{"ph"})
 
-	checkCmds(t, water.cmds, []string{"power:all:off", "float", "inlet:until", "drain:until", "drain:20"})
+	checkCmds(t, water.cmds, []string{"float", "inlet:until", "drain:until", "drain:20"})
 	if countStage(water.stages(t, sensorDeviceID), "job_failed") != 1 {
 		t.Fatalf("bơm không đầy phải báo job_failed")
 	}
@@ -191,7 +196,7 @@ func TestRunMeasure_StuckFloatWarnsButFinishes(t *testing.T) {
 	water.svc.runMeasure("pond", []string{"temp"})
 
 	checkCmds(t, water.cmds, []string{
-		"power:all:off", "float", "power:temp:on", "measure:temp", "power:temp:off", "drain:until", "drain:20",
+		"power:all:off", "float", "power:temp:on", "measure:temp@sensor", "power:temp:off", "drain:until", "drain:20",
 	})
 	if countStage(water.stages(t, waterDeviceID), "drain_warning") != 1 {
 		t.Fatalf("phao không tắt phải có drain_warning")
@@ -203,11 +208,27 @@ func TestRunMeasure_StuckFloatWarnsButFinishes(t *testing.T) {
 
 func TestRunMeasure_PowerRejectedSkipsReadButStillDrains(t *testing.T) {
 	water := newScript(t, true)
-	water.rejectPower = "ph"
+	water.rejectPower = "tds"
 	water.svc.runMeasure("pond", []string{"ph", "tds"})
 	checkCmds(t, water.cmds, []string{
-		"power:all:off", "float", "power:ph:on", "power:ph:off", "drain:until", "drain:20",
+		"power:all:off", "float", "measure:ph@ph", "power:tds:on", "power:tds:off", "drain:until", "drain:20",
 	})
+}
+
+func TestRunMeasure_PhBoardErrorStopsAndDrains(t *testing.T) {
+	water := newScript(t, true)
+	water.phError = true
+	water.svc.runMeasure("pond", []string{"ph", "temp"})
+	checkCmds(t, water.cmds, []string{"power:all:off", "float", "measure:ph@ph", "drain:until", "drain:20"})
+	if countStage(water.stages(t, sensorDeviceID), "job_failed") != 1 {
+		t.Fatalf("bo pH báo lỗi thì lượt phải job_failed")
+	}
+}
+
+func TestRunManualMeasure_PHOnlySkipsSensorBoard(t *testing.T) {
+	water := newScript(t, false)
+	water.svc.runManualMeasure([]string{"ph"})
+	checkCmds(t, water.cmds, []string{"measure:ph@ph"})
 }
 
 func TestRunManualMeasure_NoWaterCommands(t *testing.T) {
