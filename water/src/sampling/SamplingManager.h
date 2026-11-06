@@ -10,15 +10,15 @@ enum ActiveJob {
 };
 
 // Một phao, hai bơm. Firmware chỉ làm theo lệnh; backend quyết định khi nào bơm, xả.
-// Firmware vẫn tự tắt bơm khi tới phao (nếu lệnh yêu cầu), hết duration, hoặc mất MQTT.
+// Firmware vẫn tự tắt bơm khi phao đầy (bơm nạp), hết duration, hoặc mất MQTT.
 class SamplingManager {
 public:
     SamplingManager();
     void begin();
     void handle();
 
-    void startInlet(bool untilFull, uint32_t durationMs);
-    void startDrain(bool untilEmpty, uint32_t durationMs);
+    void startInlet(uint32_t durationMs);
+    void startDrain(uint32_t durationMs);
     void inletOff();
     void drainOff();
     void stopAll(const String &stage, const String &message);
@@ -28,7 +28,6 @@ public:
 
 private:
     ActiveJob activeJob = JOB_NONE;
-    bool jobUntilFloat = false;
     unsigned long jobStartedMs = 0;
     unsigned long jobDurationMs = 0;
 

@@ -8,8 +8,7 @@ export default function ControlPanel({
   inletOn = false,
   drainOn = false,
 }) {
-  const [selectedSensors, setSelectedSensors] = useState(['temp', 'ph']);
-  const [untilFloat, setUntilFloat] = useState(true);
+  const [selectedSensors, setSelectedSensors] = useState(['ph']);
   const [duration, setDuration] = useState(60);
   const [loading, setLoading] = useState(false);
 
@@ -20,8 +19,7 @@ export default function ControlPanel({
   };
 
   const availableSensors = [
-    { id: 'temp', label: '🌡️ Nhiệt độ' },
-    { id: 'ph', label: '🧪 Độ pH' },
+    { id: 'ph', label: '🧪 pH + nhiệt độ' },
     { id: 'tds', label: '💎 Chất rắn (TDS)' },
   ];
 
@@ -37,7 +35,7 @@ export default function ControlPanel({
 
   const handleMeasureAll = async () => {
     setLoading(true);
-    await onMeasure(['ph', 'temp', 'tds']);
+    await onMeasure(['ph', 'tds']);
     setLoading(false);
   };
 
@@ -50,12 +48,12 @@ export default function ControlPanel({
 
   const toggleInlet = async () => {
     if (inletOn) await onPump('inlet', false);
-    else await onPump('inlet', true, untilFloat, clampDuration(duration));
+    else await onPump('inlet', true, clampDuration(duration));
   };
 
   const toggleDrain = async () => {
     if (drainOn) await onPump('drain', false);
-    else await onPump('drain', true, untilFloat, clampDuration(duration));
+    else await onPump('drain', true, clampDuration(duration));
   };
 
   const handleClearQueue = async () => {
@@ -88,7 +86,7 @@ export default function ControlPanel({
           🚀 Đo Toàn Bộ Chỉ Số (pH + nhiệt độ + TDS)
         </button>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
-          Không chỉnh mực nước. pH đọc trên bo RS485 (khoảng 5 giây); nhiệt độ và TDS bật nguồn, chờ, đọc rồi tắt. Kết quả đủ sau khoảng 20 giây.
+          Không chỉnh mực nước. pH và nhiệt độ đọc trên cảm biến RS485 (khoảng 5 giây), sau đó TDS bật nguồn, chờ 5 giây, đọc rồi tắt. Kết quả đủ sau khoảng 15 giây.
         </div>
       </div>
 
@@ -151,15 +149,6 @@ export default function ControlPanel({
         <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px' }}>
           Điều khiển bơm / xả:
         </div>
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className={`toggle-pill ${untilFloat ? 'selected' : ''}`}
-            onClick={() => setUntilFloat(!untilFloat)}
-          >
-            Dừng theo phao: {untilFloat ? 'BẬT' : 'TẮT'}
-          </button>
-        </div>
         <label
           style={{
             display: 'flex',
@@ -170,7 +159,7 @@ export default function ControlPanel({
             marginBottom: '8px',
           }}
         >
-          Thời gian tối đa (giây, 1–300):
+          Thời gian (giây, 1–300):
           <input
             type="number"
             min={1}
@@ -183,13 +172,16 @@ export default function ControlPanel({
           />
         </label>
         <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px' }}>
-          Dừng theo phao: bơm nạp dừng khi phao đầy, bơm xả dừng khi phao tắt, hoặc hết thời gian, cái nào tới trước. Tắt: chạy đủ thời gian. Mạch không nhận lệnh bơm mới khi đang có bơm chạy.
+          Bơm nạp: dừng khi phao đầy hoặc hết thời gian, cái nào tới trước. Bơm xả: chạy đủ thời gian (không dựa vào phao).
+          Mạch không nhận lệnh bơm mới khi đang có bơm chạy.
+          {isMeasuring && ' Đang có lượt đo: chỉ tắt bơm được, chờ lượt đo xong mới bật.'}
         </div>
         <div className="btn-group" style={{ margin: 0 }}>
           <button
             className={`btn ${inletOn ? 'btn-primary' : 'btn-secondary'}`}
             style={{ flex: 1, justifyContent: 'center' }}
             onClick={toggleInlet}
+            disabled={isMeasuring && !inletOn}
           >
             🚰 Bơm Nạp: {inletOn ? 'BẬT' : 'TẮT'}
           </button>
@@ -197,6 +189,7 @@ export default function ControlPanel({
             className={`btn ${drainOn ? 'btn-primary' : 'btn-secondary'}`}
             style={{ flex: 1, justifyContent: 'center' }}
             onClick={toggleDrain}
+            disabled={isMeasuring && !drainOn}
           >
             💨 Bơm Xả: {drainOn ? 'BẬT' : 'TẮT'}
           </button>

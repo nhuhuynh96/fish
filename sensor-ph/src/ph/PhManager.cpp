@@ -5,6 +5,7 @@
 #include "../config/ConfigManager.h"
 #include "../log/RemoteLog.h"
 #include "../mqtt/MQTTHandler.h"
+#include "../tds/TdsManager.h"
 
 PhManager phManager;
 
@@ -208,6 +209,11 @@ static float medianOf(float *values, int n) {
 }
 
 void PhManager::runRead(int samples, int intervalMs) {
+    // Que TDS có điện thì dòng xoay chiều trong nước làm lệch pH.
+    if (tdsManager.isPowered()) {
+        publishEvent("sensor_error", "TDS đang bật nguồn, tắt TDS trước khi đọc pH.");
+        return;
+    }
     samples = clampInt(samples, 10, 1, MAX_SAMPLES);
     intervalMs = clampInt(intervalMs, 500, 100, 5000);
     uint32_t started = millis();
@@ -264,6 +270,14 @@ void PhManager::runRead(int samples, int intervalMs) {
     serializeJson(doc, payload);
     LOGF("[PH] pH=%.2f (%d/%d lần đọc được)\n", ph, ok, samples);
     mqttHandler.publish("sensor_data", payload);
+}
+
+bool PhManager::readTempC(float &celsius) {
+    if (cfg.tempReg < 0) return false;
+    uint16_t reg = 0;
+    if (readRegisters(cfg.addr, cfg.fc, (uint16_t)cfg.tempReg, 1, &reg, RESPONSE_TIMEOUT_MS) != MB_OK) return false;
+    celsius = (int16_t)reg * cfg.tempScale;
+    return true;
 }
 
 void PhManager::runRegs(int start, int count, int fc) {

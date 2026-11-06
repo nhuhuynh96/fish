@@ -162,6 +162,9 @@ func initSchema(db *sql.DB) error {
 			tds_interval INT NOT NULL DEFAULT 3600,
 			updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`ALTER TABLE measure_schedule ADD COLUMN IF NOT EXISTS fill_max_s INT NOT NULL DEFAULT 120`,
+		`ALTER TABLE measure_schedule ADD COLUMN IF NOT EXISTS drain_s INT NOT NULL DEFAULT 120`,
+		`ALTER TABLE measure_schedule ADD COLUMN IF NOT EXISTS settle_s INT NOT NULL DEFAULT 45`,
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil {

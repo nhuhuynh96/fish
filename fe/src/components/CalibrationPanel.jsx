@@ -44,10 +44,9 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
     async function load() {
       setLoading(true);
       try {
-        const [cal, phCal] = await Promise.all([
-          api.getCalibration(deviceId),
-          api.getCalibration(PH_DEVICE),
-        ]);
+        // pH và TDS cùng ở bo ph nên dùng chung một bản hiệu chỉnh.
+        const cal = await api.getCalibration(PH_DEVICE);
+        const phCal = cal;
         if (!active) return;
         if (cal) {
           setTds({
@@ -116,10 +115,7 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
     setSaving(true);
     setMessage('');
     try {
-      await Promise.all([
-        api.updateCalibration(deviceId, tds),
-        api.updateCalibration(PH_DEVICE, ph),
-      ]);
+      await api.updateCalibration(PH_DEVICE, { ...tds, ...ph });
       setMessage('Đã lưu hiệu chuẩn. Lần đo tiếp theo backend sẽ tính lại pH và TDS.');
     } catch (e) {
       setMessage('Lỗi: ' + e.message);
@@ -146,7 +142,7 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
       <div className="panel-header" style={{ marginBottom: '16px' }}>
         <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Hiệu Chuẩn Cảm Biến (Backend)</h3>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '6px' }}>
-          Bo pH gửi pH thô của cảm biến RS485, bo sensor gửi điện áp TDS. Chỉnh tham số tại đây, không cần nạp lại firmware.
+          Bo pH gửi pH thô của cảm biến RS485 và điện áp TDS (bù nhiệt theo nhiệt độ cảm biến pH). Chỉnh tham số tại đây, không cần nạp lại firmware.
         </p>
       </div>
 
@@ -180,7 +176,7 @@ export default function CalibrationPanel({ deviceId, latestMeasurement }) {
 
           <fieldset className="cal-fieldset">
             <legend>TDS (1 điểm chuẩn)</legend>
-            <label>Nhiệt độ bù (°C)
+            <label>Nhiệt độ bù khi không đọc được nhiệt độ cảm biến pH (°C)
               <input type="number" step="0.1" value={tds.tds_temp_c} onChange={handleTds('tds_temp_c')} />
             </label>
             <label>V trong chuẩn (tds_ref_v)

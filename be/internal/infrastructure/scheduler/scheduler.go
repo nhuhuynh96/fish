@@ -10,7 +10,7 @@ import (
 )
 
 type Measurer interface {
-	TriggerMeasurement(ctx context.Context, deviceID string, sensors []string) error
+	TriggerMeasurement(ctx context.Context, deviceID string, sensors []string, timing fish.CycleTiming) error
 	JobRunning() bool
 }
 
@@ -91,8 +91,8 @@ func (s *Scheduler) SetDeviceSchedule(ctx context.Context, cfg fish.MeasureSched
 		}
 	}
 	s.devices[cfg.DeviceID] = newState(cfg, cfg.UpdatedAt)
-	log.Printf("[Backend Scheduler] Đã lưu lịch [%s]: Auto=%v temp=%s ph=%s tds=%s",
-		cfg.DeviceID, cfg.AutoEnabled, describe(cfg.TempInterval), describe(cfg.PhInterval), describe(cfg.TdsInterval))
+	log.Printf("[Backend Scheduler] Đã lưu lịch [%s]: Auto=%v ph=%s tds=%s | xả %ds, bơm tối đa %ds, chờ %ds",
+		cfg.DeviceID, cfg.AutoEnabled, describe(cfg.PhInterval), describe(cfg.TdsInterval), cfg.DrainS, cfg.FillMaxS, cfg.SettleS)
 	out := cfg
 	return &out, nil
 }
@@ -213,7 +213,7 @@ func (s *Scheduler) checkAndTrigger(now time.Time) {
 			continue
 		}
 		log.Printf("[Backend Scheduler] Đến hạn đo [%s]: %v", deviceID, due)
-		if err := s.svc.TriggerMeasurement(ctx, deviceID, due); err != nil {
+		if err := s.svc.TriggerMeasurement(ctx, deviceID, due, st.cfg.Timing()); err != nil {
 			log.Printf("[Backend Scheduler] Chưa đo [%s]: %v", deviceID, err)
 			continue
 		}

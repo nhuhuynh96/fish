@@ -1,5 +1,7 @@
 # Sơ đồ đấu nối cảm biến (ESP32-S3)
 
+> **Ngừng dùng.** TDS đã chuyển sang bo `sensor-ph` (ESP32-C3), nhiệt độ lấy từ cảm biến pH RS485. Backend không còn gửi lệnh tới device `sensor`. Xem `sensor-ph/WIRING.md`.
+
 Khớp firmware `sensor-c`: nhiệt độ DS18B20 và TDS. pH đã chuyển sang bo riêng `sensor-ph` (ESP32-C3 + cảm biến RS485, nguồn riêng), xem `sensor-ph/WIRING.md`. Tháo mạch PH-4502C và dây GPIO 6 / GPIO 7 khỏi bo này.
 
 GPIO 5 và GPIO 9 là output, mức thấp lúc khởi động. Chỉ lên cao khi backend gửi lệnh `power` qua MQTT (xem cuối file).

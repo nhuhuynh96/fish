@@ -32,6 +32,8 @@ public:
     bool isBusy() const { return busy; }
     bool lastReadOk() const { return lastOk; }
     float lastPh() const { return lastPhValue; }
+    // Nhiệt độ trong cảm biến pH, dùng bù nhiệt cho TDS. false nếu không cấu hình temp_reg hoặc lỗi Modbus.
+    bool readTempC(float &celsius);
 
 private:
     enum Job { JOB_NONE, JOB_READ, JOB_REGS, JOB_SCAN };

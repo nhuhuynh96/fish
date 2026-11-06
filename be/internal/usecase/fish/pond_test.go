@@ -96,6 +96,41 @@ func TestWaterTempPrefersPHProbe(t *testing.T) {
 	}
 }
 
+func TestPondLatestTakesTDSFromPHBoard(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewService(store, store, store, store, nil, nil)
+	now := time.Now()
+	_ = store.SaveMeasurement(ctx, &fish.Measurement{ID: "old", DeviceID: sensorDeviceID, TDS: f64(113), CreatedAt: now.Add(-24 * time.Hour)})
+	_ = store.SaveMeasurement(ctx, &fish.Measurement{ID: "new", DeviceID: phDeviceID, TDS: f64(240), CreatedAt: now})
+	latest, _ := svc.GetPondLatest(ctx)
+	if latest.TDS == nil || *latest.TDS != 240 {
+		t.Fatalf("TDS phải lấy từ bo ph, không phải số cũ của sensor-c: %+v", latest)
+	}
+}
+
+func TestHandleSensorData_TDSUsesProbeTemp(t *testing.T) {
+	ctx := context.Background()
+	store := memory.NewStore()
+	svc := NewService(store, store, store, store, nil, nil)
+	at25 := []byte(`{"device_id":"ph","status":"success","sensors_measured":["tds"],"raw":{"tds":{"adc":900,"voltage":0.7,"sample_count":20}}}`)
+	at30 := []byte(`{"device_id":"ph","status":"success","sensors_measured":["tds"],"raw":{"tds":{"adc":900,"voltage":0.7,"sample_count":20},"temp_c":30}}`)
+	if err := svc.HandleSensorData(ctx, phDeviceID, at25); err != nil {
+		t.Fatal(err)
+	}
+	m25, _ := store.ListMeasurements(ctx, phDeviceID, 1)
+	if err := svc.HandleSensorData(ctx, phDeviceID, at30); err != nil {
+		t.Fatal(err)
+	}
+	m30, _ := store.ListMeasurements(ctx, phDeviceID, 1)
+	if m25[0].TDS == nil || m30[0].TDS == nil || *m30[0].TDS >= *m25[0].TDS {
+		t.Fatalf("nước ấm hơn thì TDS sau bù nhiệt phải thấp hơn: 25°C=%v 30°C=%v", m25[0].TDS, m30[0].TDS)
+	}
+	if m30[0].PHTemp == nil || *m30[0].PHTemp != 30 {
+		t.Fatalf("nhiệt độ kèm TDS phải lưu vào ph_temp: %+v", m30[0])
+	}
+}
+
 func TestHandleSensorData_PHBoardStoresProbeTemp(t *testing.T) {
 	ctx := context.Background()
 	store := memory.NewStore()

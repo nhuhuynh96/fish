@@ -380,12 +380,14 @@ func (s *Store) SavePondConfig(ctx context.Context, cfg *fish.PondConfig) error 
 // Trả nil khi device chưa có lịch.
 func (s *Store) GetSchedule(ctx context.Context, deviceID string) (*fish.MeasureSchedule, error) {
 	query := `
-		SELECT device_id, auto_enabled, temp_interval, ph_interval, turb_interval, tds_interval, updated_at
+		SELECT device_id, auto_enabled, temp_interval, ph_interval, turb_interval, tds_interval, updated_at,
+		       fill_max_s, drain_s, settle_s
 		FROM measure_schedule WHERE device_id = $1
 	`
 	var m fish.MeasureSchedule
 	err := s.db.QueryRowContext(ctx, query, deviceID).Scan(
 		&m.DeviceID, &m.AutoEnabled, &m.TempInterval, &m.PhInterval, &m.TurbInterval, &m.TdsInterval, &m.UpdatedAt,
+		&m.FillMaxS, &m.DrainS, &m.SettleS,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -402,9 +404,13 @@ func (s *Store) SaveSchedule(ctx context.Context, m *fish.MeasureSchedule) error
 	}
 	m.Normalize()
 	query := `
-		INSERT INTO measure_schedule (device_id, auto_enabled, temp_interval, ph_interval, turb_interval, tds_interval, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		INSERT INTO measure_schedule (device_id, auto_enabled, temp_interval, ph_interval, turb_interval, tds_interval, updated_at,
+			fill_max_s, drain_s, settle_s)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		ON CONFLICT (device_id) DO UPDATE SET
+			fill_max_s = EXCLUDED.fill_max_s,
+			drain_s = EXCLUDED.drain_s,
+			settle_s = EXCLUDED.settle_s,
 			auto_enabled = EXCLUDED.auto_enabled,
 			temp_interval = EXCLUDED.temp_interval,
 			ph_interval = EXCLUDED.ph_interval,
@@ -414,6 +420,7 @@ func (s *Store) SaveSchedule(ctx context.Context, m *fish.MeasureSchedule) error
 	`
 	_, err := s.db.ExecContext(ctx, query,
 		m.DeviceID, m.AutoEnabled, m.TempInterval, m.PhInterval, m.TurbInterval, m.TdsInterval, m.UpdatedAt,
+		m.FillMaxS, m.DrainS, m.SettleS,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert measure_schedule: %w", err)
@@ -423,7 +430,8 @@ func (s *Store) SaveSchedule(ctx context.Context, m *fish.MeasureSchedule) error
 
 func (s *Store) ListSchedules(ctx context.Context) ([]fish.MeasureSchedule, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT device_id, auto_enabled, temp_interval, ph_interval, turb_interval, tds_interval, updated_at
+		SELECT device_id, auto_enabled, temp_interval, ph_interval, turb_interval, tds_interval, updated_at,
+		       fill_max_s, drain_s, settle_s
 		FROM measure_schedule
 	`)
 	if err != nil {
@@ -433,7 +441,8 @@ func (s *Store) ListSchedules(ctx context.Context) ([]fish.MeasureSchedule, erro
 	var list []fish.MeasureSchedule
 	for rows.Next() {
 		var m fish.MeasureSchedule
-		if err := rows.Scan(&m.DeviceID, &m.AutoEnabled, &m.TempInterval, &m.PhInterval, &m.TurbInterval, &m.TdsInterval, &m.UpdatedAt); err != nil {
+		if err := rows.Scan(&m.DeviceID, &m.AutoEnabled, &m.TempInterval, &m.PhInterval, &m.TurbInterval, &m.TdsInterval, &m.UpdatedAt,
+			&m.FillMaxS, &m.DrainS, &m.SettleS); err != nil {
 			return nil, err
 		}
 		list = append(list, *m.Normalize())

@@ -15,6 +15,7 @@ import KitLogPanel from './components/KitLogPanel';
 import DeviceLogStream from './components/DeviceLogStream';
 
 const HISTORY_LIMIT = 100;
+// "sensor" là ID logic của hồ (lịch đo, lệnh đo, kit, sự kiện lượt đo); bo đo thật là "ph".
 const SENSOR_ID = 'sensor';
 const WATER_ID = 'water';
 const PH_ID = 'ph';
@@ -181,10 +182,10 @@ export default function App() {
         } else if (type === 'sampling_event') {
           if (isBoard(payload.device_id)) {
             setEvents((prev) => [payload, ...prev.slice(0, 29)]);
-            const jobStages = ['fill', 'warmup', 'measure', 'final_drain', 'drain_warning'];
-            if (payload.stage === 'fill') setPhase(0);
-            else if (payload.stage === 'warmup' || payload.stage === 'measure') setPhase(1);
-            else if (payload.stage === 'final_drain' || payload.stage === 'drain_warning') setPhase(2);
+            const jobStages = ['drain', 'fill', 'settle', 'warmup', 'measure'];
+            if (payload.stage === 'drain') setPhase(0);
+            else if (payload.stage === 'fill' || payload.stage === 'settle') setPhase(1);
+            else if (payload.stage === 'warmup' || payload.stage === 'measure') setPhase(2);
             else if (payload.stage === 'job_done' || payload.stage === 'job_failed') {
               setPhase(-1);
               setCurrentState('IDLE');
@@ -202,7 +203,7 @@ export default function App() {
             if (!exists) return [...prev, payload];
             return prev.map((d) => (d.id === payload.id ? { ...d, ...payload } : d));
           });
-          if (payload.id === SENSOR_ID && payload.state && jobPhaseRef.current < 0) {
+          if (payload.id === PH_ID && payload.state && jobPhaseRef.current < 0) {
             setCurrentState(payload.state);
           }
         } else if (type === 'pond_config_updated') {
@@ -229,16 +230,17 @@ export default function App() {
     }
   };
 
-  const handlePump = async (target, state, untilFloat = false, duration = 0) => {
+  const handlePump = async (target, state, duration = 0) => {
     if (target === 'inlet') setInletOn(state);
     if (target === 'drain') setDrainOn(state);
     try {
-      const res = await api.setPump(WATER_ID, target, state, untilFloat, duration);
+      const res = await api.setPump(WATER_ID, target, state, duration);
       if (res?.error) throw new Error(res.error);
     } catch (e) {
       if (target === 'inlet') setInletOn(!state);
       if (target === 'drain') setDrainOn(!state);
       console.error('Pump error:', e);
+      alert('Chưa bơm: ' + e.message);
     }
   };
 
@@ -271,14 +273,12 @@ export default function App() {
     }
   };
 
-  const sensorOnline = devices.find((d) => d.id === SENSOR_ID)?.online ?? false;
   const waterOnline = devices.find((d) => d.id === WATER_ID)?.online ?? false;
   const phOnline = devices.find((d) => d.id === PH_ID)?.online ?? false;
 
   return (
     <div className="app-container">
       <Header
-        sensorOnline={sensorOnline}
         waterOnline={waterOnline}
         phOnline={phOnline}
         wsConnected={wsConnected}

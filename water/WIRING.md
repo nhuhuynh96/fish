@@ -57,7 +57,7 @@ Dùng tiếp điểm NO (thường mở). Mất điện ESP32 hoặc relay thì 
 
 Bơm 220 V thì không gắn diode. Thay bằng mạch RC (100 Ω nối tiếp 100 nF loại 275 V AC) song song với bơm, và dùng relay chịu được 220 V.
 
-Bơm xả không nên chạy khô lâu. Lệnh `drain_on` không kèm `until_empty` chạy đủ `duration` kể cả khi bình đã cạn, nên dùng `duration` ngắn (10–20 giây) khi xả nốt nước đọng.
+Bơm xả không nên chạy khô lâu. Lệnh `drain_on` chạy đủ `duration` kể cả khi bình đã cạn, nên đặt thời gian xả vừa đủ cho bình cạn (đo thực tế rồi cộng thêm 10–20 giây).
 
 ## Phao mực nước
 
@@ -97,8 +97,8 @@ Gửi lệnh vào `fish/water/command`. Kết quả trả về `fish/water/event
 
 | Lệnh | Tham số | Dừng khi |
 |---|---|---|
-| `inlet_on` | `until_full` (mặc định `true`), `duration` giây (mặc định 60, 1–300) | `until_full`: phao đầy hoặc hết `duration`, cái nào trước. `until_full: false`: hết `duration` |
-| `drain_on` | `until_empty` (mặc định `false`), `duration` giây (mặc định 60, 1–300) | `until_empty`: phao tắt hoặc hết `duration`, cái nào trước. Không có: hết `duration` |
+| `inlet_on` | `duration` giây (mặc định 60, 1–300) | Phao đầy hoặc hết `duration`, cái nào trước |
+| `drain_on` | `duration` giây (mặc định 60, 1–300) | Hết `duration`, không dựa vào phao |
 | `inlet_off` | | Tắt bơm nạp ngay |
 | `drain_off` | | Tắt bơm xả ngay |
 | `stop` | | Tắt cả hai bơm (`clear_queue` cũng làm việc này) |
@@ -108,30 +108,30 @@ Không có hàng đợi. `inlet_on` hoặc `drain_on` đến lúc đang có bơm
 
 Firmware vẫn tự tắt bơm khi:
 
-- tới phao (nếu lệnh có `until_full` / `until_empty`),
+- phao đầy (bơm nạp),
 - hết `duration`,
 - mất MQTT.
 
 Hai bơm không bao giờ chạy cùng lúc.
 
-Ví dụ một lượt đo:
+Thiếu `duration` thì mạch chạy 60 giây, để không bơm mãi nếu backend quên gửi. Backend mặc định gửi 120 giây (chỉnh trong tab lịch đo).
+
+Một lượt đo tự động: xả trước, kiểm tra phao đã tắt, bơm tới khi đầy, chờ ổn định rồi đo. Đo xong không xả, để đầu dò pH luôn ngập nước.
 
 ```json
-{"action":"inlet_on","until_full":true,"duration":180}
-{"action":"drain_on","until_empty":true,"duration":120}
-{"action":"drain_on","duration":20}
+{"action":"drain_on","duration":120}
+{"action":"float"}
+{"action":"inlet_on","duration":120}
 ```
 
-Sự kiện trên `fish/water/event`, mỗi sự kiện kèm `float` (phao đầy hay chưa), `level` (1 nếu phao đầy, 0 nếu chưa), `inlet_on`, `drain_on`. Khi đang chạy bơm có thêm `until_float` và `duration_s`.
+Sự kiện trên `fish/water/event`, mỗi sự kiện kèm `float` (phao đầy hay chưa), `level` (1 nếu phao đầy, 0 nếu chưa), `inlet_on`, `drain_on`. Khi đang chạy bơm có thêm `duration_s`.
 
 | `stage` | Khi nào |
 |---|---|
 | `filling` / `draining` | Bơm bắt đầu chạy |
 | `filled` | Bơm nạp dừng vì phao đầy |
-| `drained` | Bơm xả dừng vì phao tắt |
 | `time_up` | Dừng vì hết `duration` |
-| `already_full` | `inlet_on` với `until_full` khi phao đã đầy, không bơm |
-| `already_empty` | `drain_on` với `until_empty` khi phao đã tắt, không xả |
+| `already_full` | `inlet_on` khi phao đã đầy, không bơm |
 | `pump_off` / `drain_off` / `stopped` | Tắt do lệnh |
 | `float_changed` | Phao đổi trạng thái |
 | `water_level` | Trả lời lệnh `float` |

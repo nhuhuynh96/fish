@@ -7,6 +7,7 @@
 #include "mqtt/MQTTHandler.h"
 #include "ph/PhManager.h"
 #include "portal/WebPortal.h"
+#include "tds/TdsManager.h"
 
 const int BUTTON_PIN = 9;  // nút BOOT trên ESP32-C3 Super Mini
 const int LED_PIN = 8;     // LED xanh, mức LOW là sáng
@@ -31,7 +32,34 @@ static void publishCommandError(const String &message) {
     mqttHandler.publish("event", payload);
 }
 
+static bool parseState(JsonVariantConst v, bool &on) {
+    if (v.is<bool>()) {
+        on = v.as<bool>();
+        return true;
+    }
+    if (v.is<int>()) {
+        on = v.as<int>() != 0;
+        return true;
+    }
+    if (v.is<const char *>()) {
+        String s = v.as<const char *>();
+        s.toLowerCase();
+        s.trim();
+        if (s == "on" || s == "true" || s == "1") {
+            on = true;
+            return true;
+        }
+        if (s == "off" || s == "false" || s == "0") {
+            on = false;
+            return true;
+        }
+    }
+    return false;
+}
+
 // {"action":"ph","samples":10,"interval_ms":500}
+// {"action":"power","sensor":"tds"|"all","state":true|false,"max_on_s":300} | {"action":"power_status"}
+// {"action":"tds","samples":20,"interval_ms":100}
 // {"action":"modbus_config","addr":1,"baud":9600,"fc":3,"ph_reg":0,"ph_scale":0.01,"temp_reg":-1,"temp_scale":0.1,"de_pin":-1}
 // {"action":"get_config"} | {"action":"read_regs","start":0,"count":10,"fc":3} | {"action":"scan"}
 void handleMqttCommand(const String &msg) {
@@ -52,6 +80,27 @@ void handleMqttCommand(const String &msg) {
     LOGF("[Command] action=%s\n", action.c_str());
     if (action == "ph" || action == "measure" || action == "measure_all" || action == "all") {
         phManager.requestRead(doc["samples"] | 0, doc["interval_ms"] | 0);
+        return;
+    }
+    if (action == "tds") {
+        tdsManager.requestRead(doc["samples"] | 0, doc["interval_ms"] | 0);
+        return;
+    }
+    if (action == "power") {
+        String sensor = doc["sensor"] | "";
+        sensor.toLowerCase();
+        sensor.trim();
+        bool on = false;
+        if (sensor.length() == 0 || !parseState(doc["state"], on)) {
+            publishCommandError("Lệnh power cần sensor và state. Ví dụ: {\"action\":\"power\",\"sensor\":\"tds\",\"state\":true}");
+            return;
+        }
+        int maxOnS = doc["max_on_s"] | 0;
+        tdsManager.setPower(sensor, on, maxOnS > 0 ? (uint32_t)maxOnS : 0);
+        return;
+    }
+    if (action == "power_status") {
+        tdsManager.publishPowerStatus();
         return;
     }
     if (action == "modbus_config") {
@@ -85,6 +134,7 @@ void setup() {
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     phManager.begin();
+    tdsManager.begin();
 
     bool hasConfig = configManager.loadConfig(currentConfig);
     if (!hasConfig || digitalRead(BUTTON_PIN) == LOW) {
@@ -187,6 +237,7 @@ void loop() {
     mqttHandler.handle();
     remoteLog.handle();
     phManager.handle();
+    tdsManager.handle();
     digitalWrite(LED_PIN, mqttHandler.isConnected() ? LOW : HIGH);
 
     if (millis() - lastHeartbeat > 30000) {
@@ -196,7 +247,8 @@ void loop() {
             doc["device_id"] = currentConfig.device_id;
             doc["rssi"] = WiFi.RSSI();
             doc["uptime"] = millis() / 1000;
-            doc["state"] = phManager.isBusy() ? "MEASURING" : "IDLE";
+            doc["state"] = (phManager.isBusy() || tdsManager.isBusy()) ? "MEASURING" : "IDLE";
+            doc["power"]["tds"] = tdsManager.isPowered();
             doc["modbus_ok"] = phManager.lastReadOk();
             if (!isnan(phManager.lastPh())) doc["last_ph"] = phManager.lastPh();
             String telemetry;

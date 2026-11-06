@@ -15,7 +15,7 @@ type fakeMeasurer struct {
 	calls   []string
 }
 
-func (f *fakeMeasurer) TriggerMeasurement(_ context.Context, _ string, sensors []string) error {
+func (f *fakeMeasurer) TriggerMeasurement(_ context.Context, _ string, sensors []string, _ fish.CycleTiming) error {
 	f.calls = append(f.calls, strings.Join(sensors, "+"))
 	return nil
 }

@@ -64,9 +64,8 @@ func (h *FishHandler) Pump(c *gin.Context) {
 	var req struct {
 		Target string `json:"target"` // "inlet" | "drain"
 		State  bool   `json:"state"`
-		// Bơm nạp dừng khi phao đầy, bơm xả dừng khi phao tắt; false = chạy đủ duration.
-		UntilFloat bool `json:"until_float"`
-		Duration   int  `json:"duration"` // giây, 0 = mặc định 60 của firmware, tối đa 300
+		// Bơm nạp dừng khi phao đầy hoặc hết duration; xả chạy đủ duration.
+		Duration int `json:"duration"` // giây, 0 = mặc định 60 của firmware, tối đa 300
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respond.BadRequest(c, "invalid body: target and state required")
@@ -86,7 +85,11 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		req.Duration = 300
 	}
 
-	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State, req.UntilFloat, req.Duration); err != nil {
+	if err := h.svc.SetPump(c.Request.Context(), deviceID, target, req.State, req.Duration); err != nil {
+		if errors.Is(err, fishuc.ErrJobRunning) {
+			respond.Error(c, http.StatusConflict, err.Error())
+			return
+		}
 		respond.InternalError(c, err.Error())
 		return
 	}
@@ -102,13 +105,12 @@ func (h *FishHandler) Pump(c *gin.Context) {
 		action = "inlet_on"
 	}
 	respond.OK(c, gin.H{
-		"message":     "Pump command sent",
-		"device":      deviceID,
-		"target":      target,
-		"state":       req.State,
-		"until_float": req.UntilFloat,
-		"duration":    req.Duration,
-		"action":      action,
+		"message":  "Pump command sent",
+		"device":   deviceID,
+		"target":   target,
+		"state":    req.State,
+		"duration": req.Duration,
+		"action":   action,
 	})
 }
 
@@ -146,6 +148,10 @@ func (h *FishHandler) SetSchedule(c *gin.Context) {
 		PhInterval   *int  `json:"ph_interval"`
 		TurbInterval *int  `json:"turb_interval"`
 		TdsInterval  *int  `json:"tds_interval"`
+		// Thời gian của lượt đo (giây): bơm nạp tối đa, xả, chờ ổn định.
+		FillMaxS *int `json:"fill_max_s"`
+		DrainS   *int `json:"drain_s"`
+		SettleS  *int `json:"settle_s"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respond.BadRequest(c, "invalid body")
@@ -171,6 +177,15 @@ func (h *FishHandler) SetSchedule(c *gin.Context) {
 	}
 	if req.TdsInterval != nil {
 		cfg.TdsInterval = *req.TdsInterval
+	}
+	if req.FillMaxS != nil {
+		cfg.FillMaxS = *req.FillMaxS
+	}
+	if req.DrainS != nil {
+		cfg.DrainS = *req.DrainS
+	}
+	if req.SettleS != nil {
+		cfg.SettleS = *req.SettleS
 	}
 
 	saved, err := h.sched.SetDeviceSchedule(c.Request.Context(), cfg)

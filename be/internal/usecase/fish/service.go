@@ -3,6 +3,7 @@ package fishuc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -74,8 +75,8 @@ func (s *Service) SetNarrator(n advice.Narrator) {
 	s.narrator = n
 }
 
-// 1. Bắt đầu một việc đo cho hồ. Backend tự hỏi mực nước, bơm hoặc xả, rồi mới gọi sensor.
-func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, sensors []string) error {
+// 1. Bắt đầu một lượt đo tự động: xả, bơm tới khi phao đầy, chờ ổn định, đo; đo xong giữ nước.
+func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, sensors []string, timing fish.CycleTiming) error {
 	if len(sensors) == 0 {
 		sensors = []string{"all"}
 	}
@@ -87,8 +88,9 @@ func (s *Service) TriggerMeasurement(ctx context.Context, deviceID string, senso
 	s.jobRunning = true
 	s.jobPond = deviceID
 	s.jobMu.Unlock()
-	log.Printf("[Usecase] Bắt đầu đo tự động [%s]: bơm tới khi phao đầy, đo, rồi xả: %v", deviceID, sensors)
-	go s.runMeasure(deviceID, sensors)
+	log.Printf("[Usecase] Bắt đầu đo tự động [%s]: xả %ds, bơm tối đa %ds, chờ %ds, đo %v",
+		deviceID, timing.DrainS, timing.FillMaxS, timing.SettleS, sensors)
+	go s.runMeasure(sensors, timing)
 	return nil
 }
 
@@ -110,7 +112,7 @@ func (s *Service) MeasureNow(ctx context.Context, sensors []string) error {
 	s.jobMu.Lock()
 	if s.jobRunning {
 		s.jobMu.Unlock()
-		return fmt.Errorf("đang có lượt đo, chờ xong rồi bấm lại")
+		return ErrJobRunning
 	}
 	s.jobRunning = true
 	s.jobPond = sensorDeviceID
@@ -120,22 +122,28 @@ func (s *Service) MeasureNow(ctx context.Context, sensors []string) error {
 	return nil
 }
 
-// 2. Điều khiển bơm nạp / xả thủ công. untilFloat: nạp tới khi phao đầy, xả tới khi phao tắt. duration 0 = mặc định của firmware.
-func (s *Service) SetPump(ctx context.Context, deviceID string, target string, state bool, untilFloat bool, duration int) error {
+// 2. Điều khiển bơm nạp / xả thủ công. Nạp dừng khi phao đầy hoặc hết duration; xả chạy đủ duration.
+// duration 0 = mặc định 60 giây của firmware. Đang có lượt đo thì chỉ cho tắt bơm.
+func (s *Service) SetPump(ctx context.Context, deviceID string, target string, state bool, duration int) error {
 	_ = deviceID
 	t := strings.ToLower(strings.TrimSpace(target))
 	if t != "inlet" && t != "drain" {
 		return fmt.Errorf("pump target must be \"inlet\" or \"drain\", got %q", target)
 	}
+	if state && s.JobRunning() {
+		return ErrJobRunning
+	}
 	if duration < 0 {
 		duration = 0
 	}
-	if duration > 300 {
-		duration = 300
+	if duration > fish.MaxPumpS {
+		duration = fish.MaxPumpS
 	}
-	log.Printf("[Usecase] Điều khiển bơm [%s] gửi water: state=%v until_float=%v duration=%ds", t, state, untilFloat, duration)
-	return s.pub.PublishPump(ctx, waterDeviceID, t, state, untilFloat, duration)
+	log.Printf("[Usecase] Điều khiển bơm [%s] gửi water: state=%v duration=%ds", t, state, duration)
+	return s.pub.PublishPump(ctx, waterDeviceID, t, state, duration)
 }
+
+var ErrJobRunning = errors.New("đang có lượt đo, chờ xong rồi bấm lại")
 
 func (s *Service) ClearQueue(ctx context.Context, deviceID string) error {
 	_ = deviceID
@@ -196,6 +204,12 @@ func (s *Service) HandleSensorData(ctx context.Context, deviceID string, payload
 		cal, err := s.getCalibration(ctx, body.DeviceID)
 		if err != nil {
 			return err
+		}
+		if body.Raw.TempC != nil {
+			// Bù nhiệt TDS theo nhiệt độ đo thật của cảm biến pH thay vì tds_temp_c cố định.
+			measured := *cal
+			measured.TDSTempC = *body.Raw.TempC
+			cal = &measured
 		}
 		s.applyRawReadings(m, body.Raw.PH, body.Raw.TDS, body.Raw.Turbidity, cal)
 	} else {

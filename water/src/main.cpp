@@ -33,14 +33,7 @@ const uint32_t DEFAULT_DURATION_S = 60;
 const uint32_t MIN_DURATION_S = 1;
 const uint32_t MAX_DURATION_S = 300;
 
-// until_full / until_empty quyết định có dừng theo phao không. Lệnh cũ gửi "level" > 0 cũng hiểu là dừng theo phao.
-static bool parseUntilFloat(JsonDocument &doc, const char *key, bool fallback) {
-    if (!doc[key].isNull()) return doc[key].as<bool>();
-    if (!doc["until_float"].isNull()) return doc["until_float"].as<bool>();
-    if (!doc["level"].isNull()) return doc["level"].as<int>() > 0;
-    return fallback;
-}
-
+// Thiếu duration thì chạy 60 giây, để mạch không bơm mãi khi backend quên gửi.
 static uint32_t parseDurationMs(JsonDocument &doc) {
     long seconds = DEFAULT_DURATION_S;
     if (!doc["duration"].isNull()) {
@@ -51,8 +44,8 @@ static uint32_t parseDurationMs(JsonDocument &doc) {
     return (uint32_t)seconds * 1000UL;
 }
 
-// {"action":"inlet_on","until_full":true,"duration":180}
-// {"action":"drain_on","until_empty":true,"duration":120}
+// {"action":"inlet_on","duration":120}  dừng khi phao đầy hoặc hết duration
+// {"action":"drain_on","duration":120}  xả đủ duration, không dựa vào phao
 // {"action":"inlet_off"|"drain_off"|"stop"|"float"}
 void handleMqttCommand(const String &msg) {
     String payload = msg;
@@ -61,7 +54,7 @@ void handleMqttCommand(const String &msg) {
 
     JsonDocument doc;
     if (deserializeJson(doc, payload)) {
-        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"inlet_on\",\"until_full\":true,\"duration\":180}");
+        publishCommandError("JSON không hợp lệ. Ví dụ: {\"action\":\"inlet_on\",\"duration\":120}");
         return;
     }
 
@@ -78,11 +71,11 @@ void handleMqttCommand(const String &msg) {
         return;
     }
     if (action == "inlet_on" || action == "inlet") {
-        samplingManager.startInlet(parseUntilFloat(doc, "until_full", true), parseDurationMs(doc));
+        samplingManager.startInlet(parseDurationMs(doc));
         return;
     }
     if (action == "drain_on") {
-        samplingManager.startDrain(parseUntilFloat(doc, "until_empty", false), parseDurationMs(doc));
+        samplingManager.startDrain(parseDurationMs(doc));
         return;
     }
     if (action == "inlet_off") {

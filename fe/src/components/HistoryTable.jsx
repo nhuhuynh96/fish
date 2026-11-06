@@ -15,8 +15,7 @@ export default function HistoryTable({ history }) {
           <thead>
             <tr>
               <th>Thời Gian</th>
-              <th>Nhiệt Độ pH (°C)</th>
-              <th>DS18B20 (°C)</th>
+              <th>Nhiệt Độ (°C)</th>
               <th>Độ pH</th>
               <th>TDS (ppm)</th>
               <th>Thời Gian Đo</th>
@@ -38,9 +37,6 @@ export default function HistoryTable({ history }) {
                     <td style={{ color: 'var(--text-muted)' }}>{timeStr}</td>
                     <td style={{ color: '#f87171', fontWeight: 600 }}>
                       {h.ph_temp != null ? `${h.ph_temp.toFixed(1)} °C` : '-'}
-                    </td>
-                    <td style={{ color: 'var(--text-muted)' }}>
-                      {h.temperature != null ? `${h.temperature.toFixed(1)} °C` : '-'}
                     </td>
                     <td style={{ color: '#34d399', fontWeight: 600 }}>
                       {h.ph !== undefined && h.ph !== null ? h.ph.toFixed(2) : '-'}
@@ -69,7 +65,7 @@ export default function HistoryTable({ history }) {
               })
             ) : (
               <tr>
-                <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '30px' }}>
+                <td colSpan="6" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '30px' }}>
                   Chưa có dữ liệu lịch sử. Các lần lấy mẫu hoàn tất sẽ hiển thị tại đây.
                 </td>
               </tr>

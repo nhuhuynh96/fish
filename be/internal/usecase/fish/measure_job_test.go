@@ -2,14 +2,17 @@ package fishuc
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nhuhuynh/iot-fish/internal/domain/fish"
 	"github.com/nhuhuynh/iot-fish/internal/infrastructure/memory"
 )
 
+// Giả lập mạch water và bo ph: ghi lại lệnh, trả sự kiện như firmware thật.
 type scriptWater struct {
 	svc         *Service
 	store       *memory.Store
@@ -31,35 +34,26 @@ func (w *scriptWater) PublishLevel(context.Context, string) error {
 	return nil
 }
 
-func (w *scriptWater) PublishPump(_ context.Context, _ string, target string, state bool, untilFloat bool, duration int) error {
+// Bơm nạp dừng khi phao đầy hoặc hết giờ; xả chạy đủ giờ.
+func (w *scriptWater) PublishPump(_ context.Context, _ string, target string, state bool, duration int) error {
 	if !state {
 		w.cmds = append(w.cmds, target+":off")
 		return nil
 	}
-	if !untilFloat {
-		w.cmds = append(w.cmds, target+":"+strconv.Itoa(duration))
-		if target == "drain" && !w.stuckFloat {
+	w.cmds = append(w.cmds, target+":"+strconv.Itoa(duration))
+	switch {
+	case target == "drain":
+		if !w.stuckFloat {
 			w.full = false
 		}
 		w.note("time_up")
-		return nil
-	}
-	w.cmds = append(w.cmds, target+":until")
-	switch {
-	case target == "inlet" && w.full:
+	case w.full:
 		w.note("already_full")
-	case target == "inlet" && w.fillTimeout:
-		w.note("time_up")
-	case target == "inlet":
-		w.full = true
-		w.note("filled")
-	case !w.full:
-		w.note("already_empty")
-	case w.stuckFloat:
+	case w.fillTimeout:
 		w.note("time_up")
 	default:
-		w.full = false
-		w.note("drained")
+		w.full = true
+		w.note("filled")
 	}
 	return nil
 }
@@ -71,10 +65,10 @@ func (w *scriptWater) PublishSensorPower(_ context.Context, _ string, sensor str
 	}
 	w.cmds = append(w.cmds, "power:"+sensor+":"+state)
 	if on && sensor == w.rejectPower {
-		w.svc.noteSensorEvent(sensorDeviceID, sensorDeviceID, "command_error", "", false, "TDS đang bật")
+		w.svc.noteSensorEvent(phDeviceID, phDeviceID, "command_error", "", false, "đang bận")
 		return nil
 	}
-	w.svc.noteSensorEvent(sensorDeviceID, sensorDeviceID, "power", sensor, on, "")
+	w.svc.noteSensorEvent(phDeviceID, phDeviceID, "power", sensor, on, "")
 	return nil
 }
 
@@ -84,11 +78,7 @@ func (w *scriptWater) PublishRead(_ context.Context, deviceID string, sensor str
 		w.svc.noteSensorEvent(phDeviceID, phDeviceID, "sensor_error", "", false, "Modbus không trả lời")
 		return nil
 	}
-	name := sensor
-	if name == "temp" {
-		name = "temperature"
-	}
-	w.svc.noteSensor(deviceID, deviceID, sensorSig{Stage: "data", Names: []string{name}})
+	w.svc.noteSensor(deviceID, deviceID, sensorSig{Stage: "data", Names: []string{sensor}})
 	return nil
 }
 
@@ -98,15 +88,15 @@ func (w *scriptWater) PublishSchedule(context.Context, string, bool, int, int, i
 }
 func (w *scriptWater) PublishAutoToggle(context.Context, string, bool) error { return nil }
 
-// Chờ nước ổn định 1 ms để có sự kiện warmup mà test vẫn nhanh; sensor không cần làm ấm.
+// SettleS tính bằng mili giây trong test; sensor không cần làm ấm.
 func newScript(t *testing.T, full bool) *scriptWater {
 	t.Helper()
-	prevSettle := waterSettleDelay
+	prevUnit := settleUnit
 	prevTimings := sensorTimings
-	waterSettleDelay = time.Millisecond
+	settleUnit = time.Millisecond
 	sensorTimings = map[string]sensorTiming{}
 	t.Cleanup(func() {
-		waterSettleDelay = prevSettle
+		settleUnit = prevUnit
 		sensorTimings = prevTimings
 	})
 	store := memory.NewStore()
@@ -114,6 +104,8 @@ func newScript(t *testing.T, full bool) *scriptWater {
 	water.svc = NewService(store, store, store, store, water, nil)
 	return water
 }
+
+var testTiming = fish.CycleTiming{FillMaxS: 120, DrainS: 120, SettleS: 45}
 
 func checkCmds(t *testing.T, got, want []string) {
 	t.Helper()
@@ -145,81 +137,82 @@ func countStage(stages []string, stage string) int {
 	return n
 }
 
+var refreshCmds = []string{"drain:120", "float", "inlet:120"}
+
 var allSensorsCmds = []string{
 	"measure:ph@ph",
-	"power:temp:on", "measure:temp@sensor", "power:temp:off",
-	"power:tds:on", "measure:tds@sensor", "power:tds:off",
+	"power:tds:on", "measure:tds@ph", "power:tds:off",
 }
 
-func TestRunMeasure_EmptyBinFillsOnceMeasuresAllThenDrains(t *testing.T) {
-	water := newScript(t, false)
-	water.svc.runMeasure("pond", []string{"tds", "ph", "temp"})
-
-	want := append([]string{"power:all:off", "float", "inlet:until"}, allSensorsCmds...)
-	want = append(want, "drain:until", "drain:20")
-	checkCmds(t, water.cmds, want)
-	if water.full {
-		t.Fatalf("bình phải trống sau khi xả")
-	}
-	sensor := water.stages(t, sensorDeviceID)
-	if countStage(sensor, "warmup") != 1 || countStage(sensor, "job_done") != 1 {
-		t.Fatalf("chỉ sensor đầu chờ nước ổn định và lượt phải xong: %v", sensor)
-	}
-}
-
-func TestRunMeasure_FullBinSkipsFillAndSettle(t *testing.T) {
+func TestRunMeasure_DrainsFillsSettlesMeasuresAndKeepsWater(t *testing.T) {
 	water := newScript(t, true)
-	water.svc.runMeasure("pond", []string{"all"})
+	water.svc.runMeasure([]string{"tds", "ph"}, testTiming)
 
-	want := append([]string{"power:all:off", "float"}, allSensorsCmds...)
-	want = append(want, "drain:until", "drain:20")
+	want := append([]string{"power:all:off"}, refreshCmds...)
+	want = append(want, allSensorsCmds...)
 	checkCmds(t, water.cmds, want)
-	if n := countStage(water.stages(t, sensorDeviceID), "warmup"); n != 0 {
-		t.Fatalf("bình đầy sẵn thì không chờ nước ổn định, warmup=%d", n)
+	if !water.full {
+		t.Fatalf("đo xong phải giữ nước để đầu dò pH ngập")
+	}
+	if countStage(water.stages(t, waterDeviceID), "settle") != 1 {
+		t.Fatalf("phải chờ nước ổn định sau khi bơm")
+	}
+	if countStage(water.stages(t, sensorDeviceID), "job_done") != 1 {
+		t.Fatalf("lượt phải xong")
 	}
 }
 
-func TestRunMeasure_FillTimeoutStillDrainsAndFails(t *testing.T) {
+func TestRunMeasure_PHOnlySkipsTDSPower(t *testing.T) {
+	water := newScript(t, false)
+	water.svc.runMeasure([]string{"ph", "temp"}, testTiming)
+	checkCmds(t, water.cmds, append(append([]string{}, refreshCmds...), "measure:ph@ph"))
+}
+
+func TestRunMeasure_FloatStillFullAfterDrainStopsBeforeMeasuring(t *testing.T) {
+	water := newScript(t, true)
+	water.stuckFloat = true
+	water.svc.runMeasure([]string{"ph"}, testTiming)
+
+	checkCmds(t, water.cmds, []string{"drain:120", "float"})
+	if countStage(water.stages(t, sensorDeviceID), "job_failed") != 1 {
+		t.Fatalf("xả xong phao vẫn đầy phải báo job_failed, không đo nước cũ")
+	}
+}
+
+func TestRunMeasure_FillTimeoutFailsWithoutMeasuring(t *testing.T) {
 	water := newScript(t, false)
 	water.fillTimeout = true
-	water.svc.runMeasure("pond", []string{"ph"})
+	water.svc.runMeasure([]string{"ph"}, testTiming)
 
-	checkCmds(t, water.cmds, []string{"float", "inlet:until", "drain:until", "drain:20"})
+	checkCmds(t, water.cmds, refreshCmds)
 	if countStage(water.stages(t, sensorDeviceID), "job_failed") != 1 {
 		t.Fatalf("bơm không đầy phải báo job_failed")
 	}
 }
 
-func TestRunMeasure_StuckFloatWarnsButFinishes(t *testing.T) {
-	water := newScript(t, true)
-	water.stuckFloat = true
-	water.svc.runMeasure("pond", []string{"temp"})
-
-	checkCmds(t, water.cmds, []string{
-		"power:all:off", "float", "power:temp:on", "measure:temp@sensor", "power:temp:off", "drain:until", "drain:20",
-	})
-	if countStage(water.stages(t, waterDeviceID), "drain_warning") != 1 {
-		t.Fatalf("phao không tắt phải có drain_warning")
-	}
-	if countStage(water.stages(t, sensorDeviceID), "job_done") != 1 {
-		t.Fatalf("số đo đã có thì lượt vẫn xong")
+func TestRunMeasure_UsesConfiguredTiming(t *testing.T) {
+	water := newScript(t, false)
+	water.svc.runMeasure([]string{"ph"}, fish.CycleTiming{FillMaxS: 60, DrainS: 90, SettleS: 0})
+	checkCmds(t, water.cmds, []string{"drain:90", "float", "inlet:60", "measure:ph@ph"})
+	if countStage(water.stages(t, waterDeviceID), "settle") != 0 {
+		t.Fatalf("SettleS = 0 thì không chờ")
 	}
 }
 
-func TestRunMeasure_PowerRejectedSkipsReadButStillDrains(t *testing.T) {
-	water := newScript(t, true)
+func TestRunMeasure_PowerRejectedFailsAfterPH(t *testing.T) {
+	water := newScript(t, false)
 	water.rejectPower = "tds"
-	water.svc.runMeasure("pond", []string{"ph", "tds"})
-	checkCmds(t, water.cmds, []string{
-		"power:all:off", "float", "measure:ph@ph", "power:tds:on", "power:tds:off", "drain:until", "drain:20",
-	})
+	water.svc.runMeasure([]string{"ph", "tds"}, testTiming)
+	want := append([]string{"power:all:off"}, refreshCmds...)
+	want = append(want, "measure:ph@ph", "power:tds:on", "power:tds:off")
+	checkCmds(t, water.cmds, want)
 }
 
-func TestRunMeasure_PhBoardErrorStopsAndDrains(t *testing.T) {
-	water := newScript(t, true)
+func TestRunMeasure_PhBoardErrorFails(t *testing.T) {
+	water := newScript(t, false)
 	water.phError = true
-	water.svc.runMeasure("pond", []string{"ph", "temp"})
-	checkCmds(t, water.cmds, []string{"power:all:off", "float", "measure:ph@ph", "drain:until", "drain:20"})
+	water.svc.runMeasure([]string{"ph"}, testTiming)
+	checkCmds(t, water.cmds, append(append([]string{}, refreshCmds...), "measure:ph@ph"))
 	if countStage(water.stages(t, sensorDeviceID), "job_failed") != 1 {
 		t.Fatalf("bo pH báo lỗi thì lượt phải job_failed")
 	}
@@ -237,9 +230,21 @@ func TestRunManualMeasure_NoWaterCommands(t *testing.T) {
 	checkCmds(t, water.cmds, append([]string{"power:all:off"}, allSensorsCmds...))
 }
 
-func TestNormalizeSensors_PHBeforeTemp(t *testing.T) {
+func TestSetPump_RejectsStartWhileJobRunning(t *testing.T) {
+	water := newScript(t, false)
+	water.svc.jobRunning = true
+	if err := water.svc.SetPump(context.Background(), waterDeviceID, "inlet", true, 60); !errors.Is(err, ErrJobRunning) {
+		t.Fatalf("đang có lượt đo thì không cho bật bơm tay, err=%v", err)
+	}
+	if err := water.svc.SetPump(context.Background(), waterDeviceID, "inlet", false, 0); err != nil {
+		t.Fatalf("tắt bơm luôn được phép: %v", err)
+	}
+	checkCmds(t, water.cmds, []string{"inlet:off"})
+}
+
+func TestNormalizeSensors_TempReadWithPHBeforeTDS(t *testing.T) {
 	got := strings.Join(normalizeSensors([]string{"temp", "tds", "ph"}), ",")
-	if got != "ph,temp,tds" {
+	if got != "ph,tds" {
 		t.Fatalf("thứ tự sai: %s", got)
 	}
 }

@@ -17,11 +17,19 @@ const asInterval = (value) => {
   return v < 0 ? -1 : v;
 };
 
+const clampSeconds = (value, fallback, max) => {
+  const v = Math.trunc(Number(value));
+  if (Number.isNaN(v) || v <= 0) return fallback;
+  return Math.min(max, v);
+};
+
 export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto }) {
   const [autoEnabled, setAutoEnabled] = useState(false);
-  const [tempInterval, setTempInterval] = useState(1800);
   const [phInterval, setPhInterval] = useState(1800);
   const [tdsInterval, setTdsInterval] = useState(3600);
+  const [drainS, setDrainS] = useState(120);
+  const [fillMaxS, setFillMaxS] = useState(120);
+  const [settleS, setSettleS] = useState(45);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -35,9 +43,11 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
         const sched = await api.getSchedule(deviceId);
         if (!active || !sched) return;
         setAutoEnabled(!!sched.auto_enabled);
-        if (typeof sched.temp_interval === 'number') setTempInterval(sched.temp_interval);
         if (typeof sched.ph_interval === 'number') setPhInterval(sched.ph_interval);
         if (typeof sched.tds_interval === 'number') setTdsInterval(sched.tds_interval);
+        if (sched.drain_s > 0) setDrainS(sched.drain_s);
+        if (sched.fill_max_s > 0) setFillMaxS(sched.fill_max_s);
+        if (typeof sched.settle_s === 'number') setSettleS(sched.settle_s);
       } catch (e) {
         console.error('Load schedule error:', e);
       } finally {
@@ -48,8 +58,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
     return () => { active = false; };
   }, [deviceId]);
 
-  const applyPreset = (temp, ph, tds) => {
-    setTempInterval(temp);
+  const applyPreset = (ph, tds) => {
     setPhInterval(ph);
     setTdsInterval(tds);
   };
@@ -61,10 +70,14 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
     try {
       await onSetSchedule({
         autoEnabled,
-        tempInterval: asInterval(tempInterval),
+        // Nhiệt độ đo kèm pH trên cảm biến RS485, không có lịch riêng.
+        tempInterval: -1,
         phInterval: asInterval(phInterval),
         turbInterval: -1,
         tdsInterval: asInterval(tdsInterval),
+        drainS: clampSeconds(drainS, 120, 300),
+        fillMaxS: clampSeconds(fillMaxS, 120, 300),
+        settleS: Math.max(0, Math.min(600, Math.trunc(Number(settleS)) || 0)),
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -132,10 +145,11 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
       </div>
 
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Auto: bơm tới khi phao đầy (đã đầy thì không bơm), đo pH, nhiệt độ, TDS, rồi xả tới khi phao tắt và xả thêm 20 giây.
+        Auto: xả nước cũ theo thời gian, kiểm tra phao đã tắt, bơm tới khi phao đầy, chờ nước ổn định, đo pH và nhiệt độ (cảm biến RS485), rồi TDS.
+        Đo xong không xả để đầu dò pH luôn ngập nước.
       </p>
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px' }}>
-        Khoảng đo lưu trong database: <b>-1</b> không đo, <b>0</b> đo liên tục (xong lượt này chạy lượt kế, bơm và xả liên tục),
+        Khoảng đo lưu trong database: <b>-1</b> không đo, <b>0</b> đo liên tục (xong lượt này chạy lượt kế),
         số dương là số giây giữa hai lần đo.
       </p>
 
@@ -146,15 +160,15 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(1800, 1800, 3600)}
+            onClick={() => applyPreset(1800, 3600)}
           >
-            ⏱️ Tiêu chuẩn (30p - 30p - 60p)
+            ⏱️ Tiêu chuẩn (pH 30p - TDS 60p)
           </button>
           <button
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(-1, 0, -1)}
+            onClick={() => applyPreset(0, -1)}
           >
             ⚡ Chỉ pH liên tục
           </button>
@@ -162,9 +176,9 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             type="button"
             className="btn btn-secondary"
             style={{ padding: '6px 12px', fontSize: '12px' }}
-            onClick={() => applyPreset(3600, 3600, 7200)}
+            onClick={() => applyPreset(3600, 7200)}
           >
-            🔋 Tiết kiệm (1h - 1h - 2h)
+            🔋 Tiết kiệm (pH 1h - TDS 2h)
           </button>
         </div>
       </div>
@@ -180,31 +194,7 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
         >
           <div className="form-group" style={{ margin: 0 }}>
             <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
-              🌡️ Nhiệt độ (giây)
-            </label>
-            <input
-              type="number"
-              min="-1"
-              step="1"
-              value={tempInterval}
-              onChange={(e) => setTempInterval(e.target.value)}
-              className="form-input"
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                borderRadius: '8px',
-                background: 'rgba(15, 23, 42, 0.6)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                color: '#fff',
-                fontSize: '13px',
-              }}
-            />
-            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{describeInterval(tempInterval)}</span>
-          </div>
-
-          <div className="form-group" style={{ margin: 0 }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
-              🧪 Độ pH (giây)
+              🧪 pH + nhiệt độ (giây)
             </label>
             <input
               type="number"
@@ -249,6 +239,52 @@ export default function SchedulePanel({ deviceId, onSetSchedule, onToggleAuto })
             />
             <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{describeInterval(tdsInterval)}</span>
           </div>
+        </div>
+
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+          Thời gian một lượt đo (giây):
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+            gap: '12px',
+            marginBottom: '16px',
+          }}
+        >
+          {[
+            { label: '💨 Xả (1–300)', value: drainS, set: setDrainS, min: 1, max: 300,
+              hint: 'Bơm xả chạy đủ thời gian này' },
+            { label: '🚰 Bơm tối đa (1–300)', value: fillMaxS, set: setFillMaxS, min: 1, max: 300,
+              hint: 'Dừng sớm khi phao đầy' },
+            { label: '⏳ Chờ ổn định (0–600)', value: settleS, set: setSettleS, min: 0, max: 600,
+              hint: 'Sau khi bơm đầy, trước khi đo' },
+          ].map((f) => (
+            <div key={f.label} className="form-group" style={{ margin: 0 }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                {f.label}
+              </label>
+              <input
+                type="number"
+                min={f.min}
+                max={f.max}
+                step="1"
+                value={f.value}
+                onChange={(e) => f.set(e.target.value)}
+                className="form-input"
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: '8px',
+                  background: 'rgba(15, 23, 42, 0.6)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: '#fff',
+                  fontSize: '13px',
+                }}
+              />
+              <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>{f.hint}</span>
+            </div>
+          ))}
         </div>
 
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>

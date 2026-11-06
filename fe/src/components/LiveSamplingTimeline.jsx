@@ -2,9 +2,9 @@ import React from 'react';
 
 export default function LiveSamplingTimeline({ jobPhase, latestEvent }) {
   const steps = [
-    { key: 'fill', label: '1. Bơm đầy', desc: 'Tới khi phao đầy' },
-    { key: 'measure', label: '2. Bật nguồn và đo', desc: 'pH, nhiệt độ, TDS' },
-    { key: 'final_drain', label: '3. Xả', desc: 'Tới khi phao tắt, thêm 20s' },
+    { key: 'drain', label: '1. Xả nước cũ', desc: 'Theo thời gian' },
+    { key: 'fill', label: '2. Bơm đầy + chờ ổn định', desc: 'Tới khi phao đầy' },
+    { key: 'measure', label: '3. Đo', desc: 'pH + nhiệt độ, rồi TDS' },
   ];
 
   const getStepStatus = (index) => {
@@ -23,7 +23,7 @@ export default function LiveSamplingTimeline({ jobPhase, latestEvent }) {
         Tiến Trình Đo Cảm Biến
       </div>
       <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
-        Lịch đo tự động: bơm tới khi phao đầy, chờ nước ổn định 45 giây, đo pH (bo RS485, cấp điện liên tục), rồi nhiệt độ và TDS trong cùng một lần đầy bình; nhiệt độ và TDS bật nguồn, chờ, đọc rồi tắt. Đo xong xả tới khi phao tắt rồi xả thêm 20 giây.
+        Lịch đo tự động: xả nước cũ theo thời gian, kiểm tra phao đã tắt, bơm nước mới tới khi phao đầy, chờ nước ổn định, đo pH và nhiệt độ (cảm biến RS485), rồi TDS. Đo xong giữ nước trong bình để đầu dò pH luôn ngập. Thời gian xả, bơm, chờ chỉnh trong tab lịch đo.
       </p>
 
       <div className="timeline-stepper">

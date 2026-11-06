@@ -52,11 +52,12 @@ export const api = {
     return res.json();
   },
 
-  async setPump(deviceId, target, state, untilFloat = false, duration = 0) {
+  // Bơm nạp dừng khi phao đầy hoặc hết duration; xả chạy đủ duration.
+  async setPump(deviceId, target, state, duration = 0) {
     const res = await fetch(`${API_BASE}/devices/${deviceId}/pump`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target, state, until_float: untilFloat, duration }),
+      body: JSON.stringify({ target, state, duration }),
     });
     return res.json();
   },
@@ -69,7 +70,9 @@ export const api = {
     return res.json();
   },
 
-  async setSchedule(deviceId, { autoEnabled, tempInterval, phInterval, turbInterval, tdsInterval }) {
+  async setSchedule(deviceId, {
+    autoEnabled, tempInterval, phInterval, turbInterval, tdsInterval, fillMaxS, drainS, settleS,
+  }) {
     const res = await fetch(`${API_BASE}/devices/${deviceId}/schedule`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -79,6 +82,9 @@ export const api = {
         ph_interval: Number(phInterval),
         turb_interval: Number(turbInterval),
         tds_interval: Number(tdsInterval),
+        fill_max_s: Number(fillMaxS),
+        drain_s: Number(drainS),
+        settle_s: Number(settleS),
       }),
     });
     return res.json();

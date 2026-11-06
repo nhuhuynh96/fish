@@ -13,8 +13,20 @@ import { waterTemp } from '../utils/temperature';
 const SERIES = [
   { key: 'ph', name: 'pH', color: '#34d399', unit: '', domain: [0, 14], digits: 2 },
   { key: 'tds', name: 'TDS', color: '#818cf8', unit: 'ppm', domain: ['auto', 'auto'], digits: 0 },
-  { key: 'temperature', name: 'Nhiệt độ', color: '#f87171', unit: '°C', domain: ['auto', 'auto'], digits: 1 },
+  { key: 'temperature', name: 'Nhiệt độ', color: '#f87171', unit: '°C', digits: 1, fixedRange: [25, 30], step: 0.5 },
 ];
+
+// Trục cố định theo bước (ví dụ 25, 25.5, … 30); nới ra nếu dữ liệu vượt khoảng.
+function steppedAxis(data, series) {
+  const values = data.map((d) => d[series.key]).filter((v) => v != null);
+  const [lo, hi] = series.fixedRange;
+  const s = series.step;
+  const min = Math.min(lo, Math.floor(Math.min(...values) / s) * s);
+  const max = Math.max(hi, Math.ceil(Math.max(...values) / s) * s);
+  const ticks = [];
+  for (let v = min; v <= max + 1e-9; v += s) ticks.push(Number(v.toFixed(2)));
+  return { domain: [min, max], ticks };
+}
 
 function formatTick(iso) {
   if (!iso) return '';
@@ -74,6 +86,7 @@ function ChartTooltip({ active, payload, label }) {
 
 function MiniChart({ data, series }) {
   const hasData = data.some((d) => d[series.key] != null);
+  const axis = hasData && series.step ? steppedAxis(data, series) : { domain: series.domain };
   return (
     <div className="trend-chart-panel">
       <div className="trend-chart-label" style={{ color: series.color }}>
@@ -94,7 +107,9 @@ function MiniChart({ data, series }) {
               tickLine={false}
             />
             <YAxis
-              domain={series.domain}
+              domain={axis.domain}
+              ticks={axis.ticks}
+              interval={0}
               tick={{ fill: '#64748b', fontSize: 10 }}
               width={42}
               axisLine={false}

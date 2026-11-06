@@ -45,7 +45,6 @@ void SamplingManager::emitEvent(const String &stage, const String &message) {
     doc["inlet_on"] = isInletOn();
     doc["drain_on"] = isDrainOn();
     if (activeJob != JOB_NONE) {
-        doc["until_float"] = jobUntilFloat;
         doc["duration_s"] = (unsigned long)(jobDurationMs / 1000);
     }
     doc["gpio17"] = (int)digitalRead(FLOAT_PIN);
@@ -105,7 +104,6 @@ void SamplingManager::stopHardware() {
 void SamplingManager::stopJob(const String &stage, const String &message) {
     stopHardware();
     activeJob = JOB_NONE;
-    jobUntilFloat = false;
     jobStartedMs = 0;
     jobDurationMs = 0;
     emitEvent(stage, message);
@@ -119,40 +117,34 @@ static String secondsText(uint32_t durationMs) {
     return String((unsigned long)(durationMs / 1000)) + "s";
 }
 
-void SamplingManager::startInlet(bool untilFull, uint32_t durationMs) {
+// Luôn dừng khi phao đầy hoặc hết duration, cái nào tới trước.
+void SamplingManager::startInlet(uint32_t durationMs) {
     if (activeJob != JOB_NONE) {
         emitEvent("command_error", "Đang chạy bơm, gửi stop trước khi bơm nạp.");
         return;
     }
-    if (untilFull && floatFull) {
+    if (floatFull) {
         emitEvent("already_full", "Phao đã đầy. Không bơm.");
         return;
     }
     setInletPump(true);
     activeJob = JOB_INLET;
-    jobUntilFloat = untilFull;
     jobStartedMs = millis();
     jobDurationMs = durationMs;
-    emitEvent("filling", untilFull ? "Bơm nạp: BẬT tới khi phao đầy, tối đa " + secondsText(durationMs) + "."
-                                   : "Bơm nạp: BẬT trong " + secondsText(durationMs) + ".");
+    emitEvent("filling", "Bơm nạp: BẬT tới khi phao đầy, tối đa " + secondsText(durationMs) + ".");
 }
 
-void SamplingManager::startDrain(bool untilEmpty, uint32_t durationMs) {
+// Xả theo thời gian, không dựa vào phao.
+void SamplingManager::startDrain(uint32_t durationMs) {
     if (activeJob != JOB_NONE) {
         emitEvent("command_error", "Đang chạy bơm, gửi stop trước khi xả.");
         return;
     }
-    if (untilEmpty && !floatFull) {
-        emitEvent("already_empty", "Phao đã tắt. Không xả.");
-        return;
-    }
     setDrainPump(true);
     activeJob = JOB_DRAIN;
-    jobUntilFloat = untilEmpty;
     jobStartedMs = millis();
     jobDurationMs = durationMs;
-    emitEvent("draining", untilEmpty ? "Bơm xả: BẬT tới khi phao tắt, tối đa " + secondsText(durationMs) + "."
-                                     : "Bơm xả: BẬT trong " + secondsText(durationMs) + ".");
+    emitEvent("draining", "Bơm xả: BẬT trong " + secondsText(durationMs) + ".");
 }
 
 void SamplingManager::inletOff() {
@@ -177,15 +169,9 @@ void SamplingManager::handlePump() {
     if (activeJob == JOB_NONE) return;
     bool inlet = activeJob == JOB_INLET;
 
-    if (jobUntilFloat) {
-        if (inlet && floatFull) {
-            stopJob("filled", "Phao đầy. Tắt bơm nạp.");
-            return;
-        }
-        if (!inlet && !floatFull) {
-            stopJob("drained", "Phao tắt. Tắt bơm xả.");
-            return;
-        }
+    if (inlet && floatFull) {
+        stopJob("filled", "Phao đầy. Tắt bơm nạp.");
+        return;
     }
 
     if (millis() - jobStartedMs >= jobDurationMs) {
@@ -200,8 +186,7 @@ void SamplingManager::handle() {
         LOGLN("[Sampling] Mất MQTT, tắt cả hai bơm.");
         stopHardware();
         activeJob = JOB_NONE;
-        jobUntilFloat = false;
-    }
+        }
     mqttWasConnected = connected;
 
     updateFloat();

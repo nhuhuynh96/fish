@@ -12,21 +12,18 @@ import (
 )
 
 const (
-	waterDeviceID         = "water"
-	sensorDeviceID        = "sensor"
-	phDeviceID            = "ph"
-	floatWaitLimit        = 30 * time.Second
-	waterWaitSlack        = 30 * time.Second
-	sensorWaitLimit       = 60 * time.Second
-	sensorPowerWaitLimit  = 10 * time.Second
-	sensorMaxOnS          = 300
-	fillDurationS         = 180
-	drainToFloatDurationS = 120
-	drainExtraS           = 20
+	waterDeviceID        = "water"
+	sensorDeviceID       = "sensor"
+	phDeviceID           = "ph"
+	floatWaitLimit       = 30 * time.Second
+	waterWaitSlack       = 30 * time.Second
+	sensorWaitLimit      = 60 * time.Second
+	sensorPowerWaitLimit = 10 * time.Second
+	sensorMaxOnS         = 300
 )
 
-// Đo pH ngay sau khi bơm cho kết quả cao hơn khoảng 0,5 do nước chưa ổn định.
-var waterSettleDelay = 45 * time.Second
+// Đơn vị của SettleS; test đổi sang mili giây để chạy nhanh.
+var settleUnit = time.Second
 
 type sensorTiming struct {
 	Warmup     time.Duration
@@ -34,11 +31,10 @@ type sensorTiming struct {
 	IntervalMs int
 }
 
-// pH đọc qua Modbus trên bo ph, cảm biến cấp điện liên tục nên không cần làm ấm.
+// pH và TDS cùng ở bo ph. pH RS485 cấp điện liên tục nên không cần làm ấm; TDS chỉ có điện lúc đọc.
 var sensorTimings = map[string]sensorTiming{
-	"ph":   {Samples: 10, IntervalMs: 500},
-	"temp": {Warmup: 1 * time.Second},
-	"tds":  {Warmup: 5 * time.Second, Samples: 20, IntervalMs: 100},
+	"ph":  {Samples: 10, IntervalMs: 500},
+	"tds": {Warmup: 5 * time.Second, Samples: 20, IntervalMs: 100},
 }
 
 type waterSig struct {
@@ -140,7 +136,9 @@ func (s *Service) finishJob() {
 	s.jobMu.Unlock()
 }
 
-func (s *Service) runMeasure(_ string, sensors []string) {
+// Lượt đo tự động: xả nước cũ, bơm nước mới tới khi phao đầy, chờ ổn định, đo.
+// Đo xong không xả: đầu dò pH phải luôn ngập để bầu thủy tinh không khô.
+func (s *Service) runMeasure(sensors []string, timing fish.CycleTiming) {
 	defer s.finishJob()
 	ctx := context.Background()
 	want := normalizeSensors(sensors)
@@ -148,35 +146,65 @@ func (s *Service) runMeasure(_ string, sensors []string) {
 		s.recordJob(ctx, sensorDeviceID, "job_failed", "Không có chỉ số đo được hỗ trợ.")
 		return
 	}
-	log.Printf("[MeasureJob] đo %v: bơm tới khi phao đầy, đo, rồi xả", want)
+	log.Printf("[MeasureJob] đo %v: xả %ds, bơm tối đa %ds, chờ %ds", want, timing.DrainS, timing.FillMaxS, timing.SettleS)
 
 	measureErr := s.resetSensorBoard(ctx, want)
-	var settle time.Duration
 	if measureErr == nil {
-		pumped, err := s.fillToFloat(ctx)
-		if err != nil {
-			measureErr = fmt.Errorf("bơm nạp: %w", err)
-		} else if pumped {
-			settle = waterSettleDelay
-		}
+		measureErr = s.refreshWater(ctx, timing)
 	}
 	for _, action := range want {
 		if measureErr != nil {
 			break
 		}
-		// Chỉ sensor đầu chờ nước ổn định; sensor sau đã có thêm thời gian của sensor trước.
-		measureErr = s.measureSensor(ctx, action, settle)
-		settle = 0
-	}
-
-	if err := s.drainBin(ctx); err != nil && measureErr == nil {
-		measureErr = fmt.Errorf("xả nước: %w", err)
+		measureErr = s.measureSensor(ctx, action)
 	}
 	if measureErr != nil {
 		s.recordJob(ctx, sensorDeviceID, "job_failed", measureErr.Error())
 		return
 	}
-	s.recordJob(ctx, sensorDeviceID, "job_done", "Đo xong.")
+	s.recordJob(ctx, sensorDeviceID, "job_done", "Đo xong, giữ nước trong bình để đầu dò pH luôn ngập.")
+}
+
+// Xả hết nước cũ, kiểm tra phao đã tắt, bơm tới khi phao đầy, chờ nước ổn định.
+// Phao vẫn đầy sau khi xả nghĩa là bơm xả hoặc phao hỏng; dừng để không đo nước cũ.
+func (s *Service) refreshWater(ctx context.Context, timing fish.CycleTiming) error {
+	s.recordJob(ctx, waterDeviceID, "drain", fmt.Sprintf("Xả nước cũ %d giây.", timing.DrainS))
+	stage, err := s.runWater(ctx, "drain", timing.DrainS)
+	if err != nil {
+		return fmt.Errorf("xả nước: %w", err)
+	}
+	if stage != "time_up" {
+		return fmt.Errorf("xả nước: bơm xả bị tắt giữa chừng (%s)", stage)
+	}
+
+	full, err := s.queryFloat(ctx)
+	if err != nil {
+		return fmt.Errorf("hỏi phao: %w", err)
+	}
+	if full {
+		return fmt.Errorf("xả %d giây xong phao vẫn đầy, kiểm tra bơm xả hoặc phao", timing.DrainS)
+	}
+
+	s.recordJob(ctx, waterDeviceID, "fill", fmt.Sprintf("Bơm nạp tới khi phao đầy, tối đa %d giây.", timing.FillMaxS))
+	stage, err = s.runWater(ctx, "inlet", timing.FillMaxS)
+	if err != nil {
+		return fmt.Errorf("bơm nạp: %w", err)
+	}
+	switch stage {
+	case "filled", "already_full":
+	case "time_up":
+		return fmt.Errorf("bơm nạp: phao chưa đầy sau %d giây", timing.FillMaxS)
+	default:
+		return fmt.Errorf("bơm nạp bị tắt giữa chừng (%s)", stage)
+	}
+
+	if timing.SettleS > 0 {
+		s.recordJob(ctx, waterDeviceID, "settle", fmt.Sprintf("Chờ %d giây cho nước ổn định rồi đo.", timing.SettleS))
+		if err := sleepCtx(ctx, time.Duration(timing.SettleS)*settleUnit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Đo ngay từ dashboard: bật nguồn, chờ, đọc, tắt từng sensor; không bơm hay xả.
@@ -191,7 +219,7 @@ func (s *Service) runManualMeasure(sensors []string) {
 		if measureErr != nil {
 			break
 		}
-		measureErr = s.measureSensor(ctx, action, 0)
+		measureErr = s.measureSensor(ctx, action)
 	}
 	if measureErr != nil {
 		s.recordJob(ctx, sensorDeviceID, "job_failed", measureErr.Error())
@@ -200,18 +228,11 @@ func (s *Service) runManualMeasure(sensors []string) {
 	s.recordJob(ctx, sensorDeviceID, "job_done", "Đo xong.")
 }
 
-// Bật nguồn, chờ đủ lâu hơn giữa thời gian làm ấm và thời gian nước ổn định, đọc, rồi luôn tắt nguồn.
-// pH đọc trên bo ph, không bật tắt nguồn.
-func (s *Service) measureSensor(ctx context.Context, action string, settle time.Duration) (err error) {
+// TDS: bật nguồn, chờ làm ấm, đọc, rồi luôn tắt nguồn. pH không bật tắt nguồn.
+func (s *Service) measureSensor(ctx context.Context, action string) (err error) {
 	t := sensorTimings[action]
 	label := sensorLabel(action)
 	if action == "ph" {
-		if settle > 0 {
-			s.recordJob(ctx, sensorDeviceID, "warmup", fmt.Sprintf("Chờ %d giây cho nước ổn định rồi đo pH.", int(settle.Seconds())))
-			if err := sleepCtx(ctx, settle); err != nil {
-				return err
-			}
-		}
 		s.recordJob(ctx, sensorDeviceID, "measure", "Đo pH (RS485).")
 		return s.measureOne(ctx, action, t)
 	}
@@ -225,17 +246,9 @@ func (s *Service) measureSensor(ctx context.Context, action string, settle time.
 		return fmt.Errorf("bật nguồn %s: %w", label, err)
 	}
 
-	wait := t.Warmup
-	if settle > wait {
-		wait = settle
-	}
-	if wait > 0 {
-		msg := fmt.Sprintf("Bật nguồn %s, chờ %d giây rồi đo.", label, int(wait.Seconds()))
-		if settle > 0 {
-			msg = fmt.Sprintf("Bật nguồn %s, chờ %d giây cho nước ổn định và cảm biến làm ấm rồi đo.", label, int(wait.Seconds()))
-		}
-		s.recordJob(ctx, sensorDeviceID, "warmup", msg)
-		if err := sleepCtx(ctx, wait); err != nil {
+	if t.Warmup > 0 {
+		s.recordJob(ctx, sensorDeviceID, "warmup", fmt.Sprintf("Bật nguồn %s, chờ %d giây rồi đo.", label, int(t.Warmup.Seconds())))
+		if err := sleepCtx(ctx, t.Warmup); err != nil {
 			return err
 		}
 	}
@@ -244,15 +257,13 @@ func (s *Service) measureSensor(ctx context.Context, action string, settle time.
 	return s.measureOne(ctx, action, t)
 }
 
-// Tắt hết nguồn trên bo sensor trước lượt đo; lượt chỉ đo pH không cần bo sensor.
+// Lượt có TDS thì tắt nguồn TDS trước để pH đọc khi que TDS không có điện; lượt chỉ đo pH thì bỏ qua.
 func (s *Service) resetSensorBoard(ctx context.Context, want []string) error {
-	for _, action := range want {
-		if boardFor(action) == sensorDeviceID {
-			if err := s.sensorPower(ctx, "all", false); err != nil {
-				return fmt.Errorf("tắt nguồn cảm biến: %w", err)
-			}
-			return nil
-		}
+	if !contains(want, "tds") {
+		return nil
+	}
+	if err := s.sensorPower(ctx, "all", false); err != nil {
+		return fmt.Errorf("tắt nguồn cảm biến: %w", err)
 	}
 	return nil
 }
@@ -264,10 +275,10 @@ func (s *Service) sensorPower(ctx context.Context, sensor string, on bool) error
 	if on {
 		maxOnS = sensorMaxOnS
 	}
-	if err := s.pub.PublishSensorPower(ctx, sensorDeviceID, sensor, on, maxOnS); err != nil {
+	if err := s.pub.PublishSensorPower(ctx, phDeviceID, sensor, on, maxOnS); err != nil {
 		return err
 	}
-	_, err := waitSensor(ctx, ch, sensorDeviceID, sensorPowerWaitLimit, func(sig sensorSig) bool {
+	_, err := waitSensor(ctx, ch, phDeviceID, sensorPowerWaitLimit, func(sig sensorSig) bool {
 		return sig.Stage == "power" && sig.Sensor == sensor && sig.Power == on
 	})
 	return err
@@ -287,10 +298,10 @@ func (s *Service) queryFloat(ctx context.Context) (bool, error) {
 	return sig.Full, nil
 }
 
-// Trả stage làm bơm dừng: filled/drained/already_full/already_empty, time_up, hoặc lệnh tắt.
-func (s *Service) runWater(ctx context.Context, target string, untilFloat bool, durationS int) (string, error) {
+// Trả stage làm bơm dừng: filled/already_full (bơm nạp), time_up, hoặc lệnh tắt.
+func (s *Service) runWater(ctx context.Context, target string, durationS int) (string, error) {
 	ch := s.armWater()
-	if err := s.pub.PublishPump(ctx, waterDeviceID, target, true, untilFloat, durationS); err != nil {
+	if err := s.pub.PublishPump(ctx, waterDeviceID, target, true, durationS); err != nil {
 		return "", err
 	}
 	limit := time.Duration(durationS)*time.Second + waterWaitSlack
@@ -300,8 +311,6 @@ func (s *Service) runWater(ctx context.Context, target string, untilFloat bool, 
 			return true
 		case "filled", "already_full":
 			return target == "inlet"
-		case "drained", "already_empty":
-			return target == "drain"
 		}
 		return false
 	})
@@ -309,57 +318,6 @@ func (s *Service) runWater(ctx context.Context, target string, untilFloat bool, 
 		return "", err
 	}
 	return sig.Stage, nil
-}
-
-// pumped = vừa bơm, nước cần thời gian ổn định trước khi đo.
-func (s *Service) fillToFloat(ctx context.Context) (pumped bool, err error) {
-	full, err := s.queryFloat(ctx)
-	if err != nil {
-		return false, err
-	}
-	if full {
-		log.Printf("[MeasureJob] phao đã đầy, không bơm")
-		return false, nil
-	}
-	s.recordJob(ctx, waterDeviceID, "fill", fmt.Sprintf("Bơm nạp tới khi phao đầy, tối đa %d giây.", fillDurationS))
-	stage, err := s.runWater(ctx, "inlet", true, fillDurationS)
-	if err != nil {
-		return true, err
-	}
-	switch stage {
-	case "filled", "already_full":
-		return true, nil
-	case "time_up":
-		return true, fmt.Errorf("phao chưa đầy sau %d giây", fillDurationS)
-	default:
-		return true, fmt.Errorf("bơm nạp bị tắt giữa chừng (%s)", stage)
-	}
-}
-
-// Xả tới khi phao tắt, rồi xả thêm drainExtraS cho cạn. Phao không tắt kịp chỉ ghi cảnh báo, vẫn xả thêm.
-func (s *Service) drainBin(ctx context.Context) error {
-	s.recordJob(ctx, waterDeviceID, "final_drain",
-		fmt.Sprintf("Xả tới khi phao tắt (tối đa %d giây), rồi xả thêm %d giây.", drainToFloatDurationS, drainExtraS))
-	stage, err := s.runWater(ctx, "drain", true, drainToFloatDurationS)
-	if err != nil {
-		return err
-	}
-	switch stage {
-	case "drained", "already_empty":
-	case "time_up":
-		s.recordJob(ctx, waterDeviceID, "drain_warning",
-			fmt.Sprintf("Xả %d giây mà phao chưa tắt. Kiểm tra phao hoặc bơm xả.", drainToFloatDurationS))
-	default:
-		return fmt.Errorf("bơm xả bị tắt giữa chừng (%s)", stage)
-	}
-	stage, err = s.runWater(ctx, "drain", false, drainExtraS)
-	if err != nil {
-		return err
-	}
-	if stage != "time_up" {
-		return fmt.Errorf("bơm xả bị tắt giữa chừng (%s)", stage)
-	}
-	return nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -373,25 +331,13 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func boardFor(action string) string {
-	if action == "ph" {
-		return phDeviceID
-	}
-	return sensorDeviceID
-}
-
 func (s *Service) measureOne(ctx context.Context, action string, t sensorTiming) error {
-	board := boardFor(action)
 	ch := s.armSensor()
-	if err := s.pub.PublishRead(ctx, board, action, t.Samples, t.IntervalMs); err != nil {
+	if err := s.pub.PublishRead(ctx, phDeviceID, action, t.Samples, t.IntervalMs); err != nil {
 		return err
 	}
-	want := action
-	if action == "temp" {
-		want = "temperature"
-	}
-	_, err := waitSensor(ctx, ch, board, sensorWaitLimit, func(sig sensorSig) bool {
-		return sig.Stage == "data" && contains(sig.Names, want)
+	_, err := waitSensor(ctx, ch, phDeviceID, sensorWaitLimit, func(sig sensorSig) bool {
+		return sig.Stage == "data" && contains(sig.Names, action)
 	})
 	if err != nil {
 		return fmt.Errorf("đọc %s: %w", sensorLabel(action), err)
@@ -471,8 +417,6 @@ func sensorLabel(action string) string {
 	switch action {
 	case "ph":
 		return "pH"
-	case "temp":
-		return "nhiệt độ"
 	case "tds":
 		return "TDS"
 	default:
@@ -480,27 +424,24 @@ func sensorLabel(action string) string {
 	}
 }
 
-// Thứ tự cố định pH, temp, TDS.
-// pH phải đo trước nhiệt độ: đo ngay sau DS18B20 làm pH cao hơn khoảng 0,5.
+// Thứ tự cố định pH rồi TDS: pH phải đọc khi que TDS chưa có điện.
+// Nhiệt độ đo kèm pH trong cảm biến RS485, nên yêu cầu nhiệt độ được đọc bằng lệnh pH.
 func normalizeSensors(sensors []string) []string {
 	seen := map[string]bool{}
 	add := func(name string) { seen[name] = true }
 	for _, raw := range sensors {
 		switch strings.ToLower(strings.TrimSpace(raw)) {
 		case "all", "tat_ca", "measure_all":
-			add("temp")
 			add("ph")
 			add("tds")
-		case "ph":
+		case "ph", "temp", "temperature", "nhiet_do":
 			add("ph")
-		case "temp", "temperature", "nhiet_do":
-			add("temp")
 		case "tds":
 			add("tds")
 		}
 	}
 	var out []string
-	for _, name := range []string{"ph", "temp", "tds"} {
+	for _, name := range []string{"ph", "tds"} {
 		if seen[name] {
 			out = append(out, name)
 		}

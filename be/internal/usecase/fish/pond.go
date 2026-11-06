@@ -109,24 +109,31 @@ func (s *Service) GetPondLatest(ctx context.Context) (*fish.Measurement, error) 
 		return nil, nil
 	}
 
+	// Bo ph có pH, nhiệt độ và TDS; bo sensor cũ chỉ còn làm dự phòng cho trường bo ph chưa có.
 	var merged fish.Measurement
 	switch {
 	case base == nil:
 		merged = *ph
-	case ph == nil || ph.PH == nil:
+	case ph == nil:
 		merged = *base
 	default:
 		merged = *base
-		merged.PH = ph.PH
-		merged.PHRaw = ph.PHRaw
-		merged.PHTemp = ph.PHTemp
-		merged.PHAdc = nil
-		merged.PHVoltage = nil
+		if ph.PH != nil {
+			merged.PH, merged.PHRaw, merged.PHAdc, merged.PHVoltage = ph.PH, ph.PHRaw, nil, nil
+		}
+		if ph.PHTemp != nil {
+			merged.PHTemp = ph.PHTemp
+		}
+		if ph.TDS != nil {
+			merged.TDS, merged.TDSAdc, merged.TDSVoltage = ph.TDS, ph.TDSAdc, ph.TDSVoltage
+		}
 		if ph.CreatedAt.After(merged.CreatedAt) {
 			merged.CreatedAt = ph.CreatedAt
 		}
-		if !contains(merged.Sensors, "ph") {
-			merged.Sensors = append(append([]string{}, merged.Sensors...), "ph")
+		for _, name := range ph.Sensors {
+			if !contains(merged.Sensors, name) {
+				merged.Sensors = append(append([]string{}, merged.Sensors...), name)
+			}
 		}
 	}
 

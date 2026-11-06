@@ -1,6 +1,10 @@
 import React from 'react';
 
-export default function EventLogStream({ events }) {
+// Bật/tắt nguồn TDS là bước nội bộ của lượt đo; power_timeout vẫn hiện để biết TDS bị tự tắt.
+const HIDDEN_STAGES = new Set(['power', 'power_status']);
+
+export default function EventLogStream({ events: allEvents }) {
+  const events = (allEvents || []).filter((e) => !HIDDEN_STAGES.has(e.stage));
   return (
     <div className="glass-card">
       <div className="section-title">

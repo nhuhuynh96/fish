@@ -59,19 +59,17 @@ func (p *CommandPublisher) PublishRead(ctx context.Context, deviceID string, sen
 	return p.publish(deviceID, body)
 }
 
-// Luôn gửi until_full / until_empty vì firmware mặc định until_full = true. duration 0 = mặc định 60 giây của firmware.
-func (p *CommandPublisher) PublishPump(ctx context.Context, deviceID string, target string, state bool, untilFloat bool, duration int) error {
+// duration 0 thì không gửi, firmware chạy mặc định 60 giây.
+func (p *CommandPublisher) PublishPump(ctx context.Context, deviceID string, target string, state bool, duration int) error {
 	_ = ctx
 	prefix := "inlet"
-	untilKey := "until_full"
 	if target == "drain" {
 		prefix = "drain"
-		untilKey = "until_empty"
 	}
 	if !state {
 		return p.publishCommand(deviceID, prefix+"_off")
 	}
-	body := map[string]any{"action": prefix + "_on", untilKey: untilFloat}
+	body := map[string]any{"action": prefix + "_on"}
 	if duration > 0 {
 		body["duration"] = duration
 	}
